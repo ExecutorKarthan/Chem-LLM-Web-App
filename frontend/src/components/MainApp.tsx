@@ -1,12 +1,12 @@
 // Import needed modules
 import { useState, useEffect } from "react";
 import axios from "axios";
-import LLMEntryBox from "./LLMEntryBox";
-import LLMResponseBox from "./LLMResponseBox";
-import PythonEditor from "./PythonEditor";
-import SkulptDisplay from "./SkulptDisplay";
+import LLMEntryBox from "./LLMEntryBox.js";
+import LLMResponseBox from "./LLMResponseBox.js";
+import PythonEditor from "./PythonEditor.js";
+import SkulptDisplay from "./SkulptDisplay.js";
 import { Row, Col} from "antd";
-import { BACKEND_URL } from "../config";
+import { BACKEND_URL } from "../config.js";
 
 // Create interfaces for type safety
 interface Puzzle {

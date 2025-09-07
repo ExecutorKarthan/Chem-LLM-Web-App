@@ -1,9 +1,9 @@
 // Import needed modules
 import { JSX, useEffect, useState } from "react";
 import axios from "axios";
-import SplashGate from "./components/Splashgate";
-import MainApp from "./components/MainApp";
-import { BACKEND_URL } from "./config";
+import SplashGate from "./components/Splashgate.js";
+import MainApp from "./components/MainApp.js";
+import { BACKEND_URL } from "./config.js";
 
 // Check if cookie token exists on the server
 const checkTokenServerSide = async (): Promise<boolean> => {

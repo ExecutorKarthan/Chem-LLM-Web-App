@@ -1,9 +1,9 @@
 // Import needed modules
 import React from "react";
-import processResponse from "../utils/responseProcessor";
+import processResponse from "../utils/responseProcessor.js";
 import { Button } from "antd";
 import axios from "axios";
-import { BACKEND_URL } from '../config';
+import { BACKEND_URL } from '../config.js';
 
 // Create an interface for type safety
 interface LLMResponseProps {

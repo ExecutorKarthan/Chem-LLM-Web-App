@@ -3,7 +3,7 @@ import { useState } from "react";
 import axios from "axios";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faEye, faEyeSlash } from '@fortawesome/free-solid-svg-icons';
-import { BACKEND_URL } from "../config";
+import { BACKEND_URL } from "../config.js";
 
 // Create an initial page that will restrict people from accessing the app without accepting the terms or providing an API key
 const SplashGate: React.FC = () => {

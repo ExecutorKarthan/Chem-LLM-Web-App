@@ -1,6 +1,6 @@
 // Import needed modules
 import React, { useEffect, useRef, useState } from "react";
-import { BACKEND_URL } from "../config";
+import { BACKEND_URL } from "../config.js";
 
 // Define interfaces for type safety on objects used by the code
 interface Puzzle {
