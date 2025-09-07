@@ -1,5 +1,6 @@
 // Import needed modules
 import React, { useEffect, useRef, useState } from "react";
+import { BACKEND_URL } from "../config";
 
 // Define interfaces for type safety on objects used by the code
 interface Puzzle {
@@ -58,7 +59,7 @@ const SkulptDisplay: React.FC<SkulptDisplayProps> = ({ code, onCodeChange }) => 
   // Create a hook to load primary pieces for the app to be ready
   useEffect(() => {
     // Fetch puzzle data from Django backend server
-    fetch(import.meta.env.VITE_BACKEND_URL + "/api/puzzles/")
+    fetch({BACKEND_URL} + "/api/puzzles/")
       .then((res) => res.json())
       .then((data) => setPuzzleData(data))
       .catch((err) => console.error("Failed to load puzzles", err));
@@ -225,7 +226,7 @@ screen.setworldcoordinates(-${Math.floor(width / 2)}, -${Math.floor(height / 2)}
         {/* Dsiplay the image of the puzzle when its button is clicked */}
         {showPuzzle && selectedPuzzle ? (
           <img
-            src={`${import.meta.env.VITE_BACKEND_URL}${selectedPuzzle.image_url}`}
+            src={`${BACKEND_URL}${selectedPuzzle.image_url}`}
             alt={`Puzzle ${selectedPuzzle.id}`}
             style={{
               marginTop: 20,

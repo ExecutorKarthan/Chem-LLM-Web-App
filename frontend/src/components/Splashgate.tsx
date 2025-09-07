@@ -3,6 +3,7 @@ import { useState } from "react";
 import axios from "axios";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faEye, faEyeSlash } from '@fortawesome/free-solid-svg-icons';
+import { BACKEND_URL } from "../config";
 
 // Create an initial page that will restrict people from accessing the app without accepting the terms or providing an API key
 const SplashGate: React.FC = () => {
@@ -27,7 +28,7 @@ const SplashGate: React.FC = () => {
     // If there is an API key and Terms are agreed, tokenize the key and set terms to true
     try {
       const response = await axios.post(
-        `${import.meta.env.VITE_BACKEND_URL}/api/tokenize-key/`,
+        `${BACKEND_URL}/api/tokenize-key/`,
         { apiKey: apiKey.trim() },
         { withCredentials: true }
       );

@@ -3,6 +3,7 @@ import React from "react";
 import processResponse from "../utils/responseProcessor";
 import { Button } from "antd";
 import axios from "axios";
+import { BACKEND_URL } from '../config';
 
 // Create an interface for type safety
 interface LLMResponseProps {
@@ -31,7 +32,7 @@ const handleClearToken = async () => {
   try {
     localStorage.removeItem("gemini_token");
     await axios.post(
-      `${import.meta.env.VITE_BACKEND_URL}/api/clear-token/`,
+      `${BACKEND_URL}/api/clear-token/`,
       {},
       { withCredentials: true }
     );

@@ -3,13 +3,14 @@ import { JSX, useEffect, useState } from "react";
 import axios from "axios";
 import SplashGate from "./components/Splashgate";
 import MainApp from "./components/MainApp";
+import { BACKEND_URL } from "./config";
 
 // Check if cookie token exists on the server
 const checkTokenServerSide = async (): Promise<boolean> => {
   try {
     // Query the Django server looking for a secure cookie to exist
     const res = await axios.get(
-      import.meta.env.VITE_BACKEND_URL + "/api/check-cookie/",
+      {BACKEND_URL} + "/api/check-cookie/",
       { withCredentials: true }
     );
     // Return true if the cookie exists

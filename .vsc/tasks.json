@@ -1,0 +1,25 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Build & Run LLM-Web-App Dev",
+      "type": "shell",
+      "command": "apptainer build --force llm-web-app-dev.sif llm-web-app-dev.def && apptainer run --bind \"${workspaceFolder}:/opt/llm\" llm-web-app-dev.sif",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "group": "build"
+    },
+    {
+      "label": "Build & Run LLM-Web-App Prod",
+      "type": "shell",
+      "command": "apptainer build --force llm-web-app-prod.sif llm-web-app-prod.def && apptainer run --bind \"${workspaceFolder}:/opt/llm\" llm-web-app-prod.sif",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "group": "build"
+    }
+  ]
+}

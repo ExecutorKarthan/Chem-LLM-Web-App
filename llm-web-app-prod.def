@@ -1,0 +1,56 @@
+Bootstrap: docker
+From: python:3.11-slim
+
+%labels
+    Author    Alex
+    Version   1.0
+    App       LLM-Web-App
+
+%environment
+    export PYTHONUNBUFFERED=1
+    export PATH=/opt/llm:$PATH
+    export NODE_ENV=production
+
+%post
+    # Install OS-level deps
+    apt-get update && \
+        apt-get install -y --no-install-recommends \
+            git build-essential curl ca-certificates nodejs npm && \
+        rm -rf /var/lib/apt/lists/*
+
+    # Create app directory
+    mkdir -p /opt/llm
+    cd /opt/llm
+
+    # Upgrade pip
+    pip install --no-cache-dir --upgrade pip
+
+    # Install backend (Django) dependencies
+    if [ -f requirements.txt ]; then
+        pip install --no-cache-dir -r requirements.txt
+    fi
+
+    # Install frontend deps and build React
+    if [ -d frontend ]; then
+        cd frontend
+        npm install
+        npm run build
+        cd ..
+    fi
+
+    # Collect Django static files (including React build)
+    if [ -d backend ]; then
+        cd backend
+        python manage.py collectstatic --noinput
+        cd ..
+    fi
+
+    # Install Gunicorn to serve Django in production
+    pip install gunicorn
+
+%files
+    . /opt/llm
+
+%runscript
+    cd /opt/llm/backend
+    exec gunicorn backend.wsgi:application --bind 0.0.0.0:8000
