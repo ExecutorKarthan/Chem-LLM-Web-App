@@ -25,3 +25,5 @@ dist-ssr
 .env
 node_modules
 package-lock.json
+tmp/*
+*.sif

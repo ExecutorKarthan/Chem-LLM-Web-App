@@ -28,7 +28,7 @@ const SplashGate: React.FC = () => {
     // If there is an API key and Terms are agreed, tokenize the key and set terms to true
     try {
       const response = await axios.post(
-        `${BACKEND_URL}/api/tokenize-key/`,
+        `${BACKEND_URL}` + "/api/tokenize-key/",
         { apiKey: apiKey.trim() },
         { withCredentials: true }
       );

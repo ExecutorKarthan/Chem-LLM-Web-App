@@ -25,7 +25,8 @@ STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 ALLOWED_HOSTS = [
     "llm-web-app-backend.onrender.com",
     "localhost",
-    'llmexplorer.engr.wustl.edu',                 
+    "llmexplorer.engr.wustl.edu",
+    "http://127.0.0.1:8000/",                 
 ]
 
 # Application definition
@@ -73,6 +74,7 @@ CORS_ALLOW_CREDENTIALS = True
 CSRF_TRUSTED_ORIGINS = [
     "https://llm-web-app-4970.onrender.com/", 
     "https://llmexplorer.engr.wustl.edu", 
+    "http://localhost:5173",
 ]
 
 # Defines locations for URL routs and how to render HTML

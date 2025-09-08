@@ -10,9 +10,10 @@ const checkTokenServerSide = async (): Promise<boolean> => {
   try {
     // Query the Django server looking for a secure cookie to exist
     const res = await axios.get(
-      {BACKEND_URL} + "/api/check-cookie/",
+      `${BACKEND_URL}` + "/api/check-cookie/",
       { withCredentials: true }
     );
+    console.log(`${BACKEND_URL}`+ "/api/check-cookie/")
     // Return true if the cookie exists
     if (res.data.token_exists === true) {
       return true;
@@ -36,6 +37,8 @@ function App(): JSX.Element {
     const checkCookie = async () => {
       const present = await checkTokenServerSide();
       setCookiePresent(present);
+      console.log(cookiePresent)
+      console.log(BACKEND_URL)
     };
     checkCookie();
 

@@ -59,7 +59,7 @@ const SkulptDisplay: React.FC<SkulptDisplayProps> = ({ code, onCodeChange }) => 
   // Create a hook to load primary pieces for the app to be ready
   useEffect(() => {
     // Fetch puzzle data from Django backend server
-    fetch({BACKEND_URL} + "/api/puzzles/")
+    fetch(`${BACKEND_URL}` + "/api/puzzles/")
       .then((res) => res.json())
       .then((data) => setPuzzleData(data))
       .catch((err) => console.error("Failed to load puzzles", err));

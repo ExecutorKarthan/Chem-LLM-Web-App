@@ -1,0 +1,59 @@
+Bootstrap: docker
+From: ubuntu:22.04
+
+%labels
+    Author Alex Messina
+    Version 1.0
+    Description LLM Web App container
+
+%post
+    echo "=== Updating base system ==="
+    apt-get update && apt-get upgrade -y
+
+    echo "=== Installing prerequisites ==="
+    DEBIAN_FRONTEND=noninteractive apt-get install -y \
+        curl \
+        gnupg \
+        apt-transport-https \
+        build-essential \
+        python3-pip \
+        python3-venv \
+        git \
+        sudo \
+        && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+    echo "=== Removing conflicting Node packages ==="
+    apt-get remove -y nodejs npm libnode-dev || true
+
+    echo "=== Installing Node 20 ==="
+    curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+    apt-get install -y nodejs
+    npm install -g npm@latest
+    npm install -g concurrently
+
+    echo "=== Setting up Python virtual environment ==="
+    python3 -m venv /opt/venv
+    /opt/venv/bin/pip install --upgrade pip setuptools wheel
+
+    echo "=== Copying application source ==="
+    mkdir -p /opt/llm-web-app
+    cp -r /tmp/llm-web-app/* /opt/llm-web-app/
+
+    echo "=== Installing backend requirements ==="
+    /opt/venv/bin/pip install -r /opt/llm-web-app/backend/requirements.txt
+
+    echo "=== Installing frontend dependencies ==="
+    cd /opt/llm-web-app/frontend
+    npm install
+
+%environment
+    export PATH="/opt/venv/bin:$PATH"
+    export NODE_PATH="/usr/lib/node_modules"
+
+%runscript
+    echo "=== Running LLM Web App ==="
+    cd /opt/llm-web-app
+    # Use concurrently to run Django backend + React frontend
+    concurrently \
+        "/opt/venv/bin/python backend/manage.py runserver 0.0.0.0:8000" \
+        "cd frontend && npm run dev"

@@ -33,7 +33,7 @@ const MainApp = () => {
   useEffect(() => {
     // Fetch the puzzle data from the backend server
     axios
-      .get({BACKEND_URL} + "/api/puzzles/")
+      .get(`${BACKEND_URL}` + "/api/puzzles/")
       .then((res) => {
         setPuzzles(res.data);
       })
@@ -53,7 +53,7 @@ const MainApp = () => {
     // Attempt to pass the query and API key to the backend for processing if submitted - wait for a response
       try {
         const res = await axios.post(
-          {BACKEND_URL} + "/api/ask/",
+          `${BACKEND_URL}` + "/api/ask/",
           {
             prompt: userQuery.trim(),
           },

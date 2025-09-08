@@ -32,7 +32,7 @@ const handleClearToken = async () => {
   try {
     localStorage.removeItem("gemini_token");
     await axios.post(
-      `${BACKEND_URL}/api/clear-token/`,
+      `${BACKEND_URL}` + "/api/clear-token/",
       {},
       { withCredentials: true }
     );
