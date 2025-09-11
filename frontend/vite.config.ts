@@ -6,11 +6,11 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   plugins: [react()],
   server: {
-    host: '0.0.0.0',      // Make frontend accessible from outside the container
-    port: 5173,
+    host: 'localhost',      // Make frontend accessible from outside the container
+    port: 32780,
     proxy: {
       '/api': {            // Proxy all /api requests to Django
-        target: 'http://127.0.0.1:8000',
+        target: 'http://llmexplorer.engr.wustl.edu:8000',
         changeOrigin: true,
         secure: false,
       },

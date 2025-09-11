@@ -58,8 +58,8 @@ MIDDLEWARE = [
 # Allow CORS to operate depending on origins
 CORS_ALLOWED_ORIGINS = [
     "https://llm-web-app-4970.onrender.com",
-    "http://localhost:5173",
-    "https://llmexplorer.engr.wustl.edu",
+    "http://localhost:32780",
+    "https://llmexplorer.engr.wustl.edu:32780",
 ]
 
 # Permit the custom header for tokens
@@ -73,7 +73,7 @@ CORS_ALLOW_CREDENTIALS = True
 # Define trusted origins for cookies
 CSRF_TRUSTED_ORIGINS = [
     "https://llm-web-app-4970.onrender.com/", 
-    "https://llmexplorer.engr.wustl.edu", 
+    "https://llmexplorer.engr.wustl.edu:32780", 
     "http://localhost:5173",
 ]
 
