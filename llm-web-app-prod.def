@@ -1,56 +1,70 @@
 Bootstrap: docker
-From: python:3.11-slim
+From: ubuntu:22.04
 
 %labels
-    Author    Alex
-    Version   1.0
-    App       LLM-Web-App
-
-%environment
-    export PYTHONUNBUFFERED=1
-    export PATH=/opt/llm:$PATH
-    export NODE_ENV=production
+    Author Alex Messina
+    Version 1.0
+    Description LLM Web App container (Production)
 
 %post
-    # Install OS-level deps
-    apt-get update && \
-        apt-get install -y --no-install-recommends \
-            git build-essential curl ca-certificates nodejs npm && \
-        rm -rf /var/lib/apt/lists/*
+    echo "=== Updating base system ==="
+    apt-get update && apt-get upgrade -y
 
-    # Create app directory
-    mkdir -p /opt/llm
-    cd /opt/llm
+    echo "=== Installing prerequisites ==="
+    DEBIAN_FRONTEND=noninteractive apt-get install -y \
+        curl \
+        gnupg \
+        apt-transport-https \
+        build-essential \
+        python3-pip \
+        python3-venv \
+        git \
+        sudo \
+        && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-    # Upgrade pip
-    pip install --no-cache-dir --upgrade pip
+    echo "=== Installing Node 20 (for frontend build) ==="
+    curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+    apt-get install -y nodejs
+    npm install -g npm@latest
 
-    # Install backend (Django) dependencies
-    if [ -f requirements.txt ]; then
-        pip install --no-cache-dir -r requirements.txt
-    fi
+    echo "=== Setting up Python virtual environment ==="
+    python3 -m venv /opt/venv
+    /opt/venv/bin/pip install --upgrade pip setuptools wheel
 
-    # Install frontend deps and build React
-    if [ -d frontend ]; then
-        cd frontend
-        npm install
-        npm run build
-        cd ..
-    fi
+    echo "=== Copying application source ==="
+    mkdir -p /opt/llm-web-app
+    cp -r /tmp/llm-web-app/* /opt/llm-web-app/
 
-    # Collect Django static files (including React build)
-    if [ -d backend ]; then
-        cd backend
-        python manage.py collectstatic --noinput
-        cd ..
-    fi
+    echo "=== Installing backend requirements ==="
+    cd /opt/llm-web-app/backend
+    /opt/venv/bin/pip install -r requirements.txt
+    /opt/venv/bin/pip install gunicorn whitenoise
 
-    # Install Gunicorn to serve Django in production
-    pip install gunicorn
+    echo "=== Building frontend (React) ==="
+    cd /opt/llm-web-app/frontend
+    npm install
+    npm run build
 
-%files
-    . /opt/llm
+    echo "=== Collecting Django static files ==="
+    cd /opt/llm-web-app/backend
+    /opt/venv/bin/python manage.py collectstatic --noinput
+
+    echo "=== Cleaning up Node (not needed at runtime) ==="
+    apt-get purge -y nodejs npm
+    apt-get autoremove -y
+    apt-get clean
+    rm -rf /var/lib/apt/lists/* /root/.npm
+
+%environment
+    export PATH="/opt/venv/bin:$PATH"
+    export DJANGO_SETTINGS_MODULE=backend.settings
+    export PYTHONUNBUFFERED=1
+    export NODE_ENV=production
 
 %runscript
-    cd /opt/llm/backend
-    exec gunicorn backend.wsgi:application --bind 0.0.0.0:8000
+    echo "=== Starting LLM Web App (Production) ==="
+    cd /opt/llm-web-app/backend
+    exec gunicorn backend.wsgi:application \
+        --bind 0.0.0.0:8000 \
+        --workers 4 \
+        --timeout 120

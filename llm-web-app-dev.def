@@ -4,7 +4,7 @@ From: ubuntu:22.04
 %labels
     Author Alex Messina
     Version 1.0
-    Description LLM Web App container
+    Description LLM Web App container (Development)
 
 %post
     echo "=== Updating base system ==="
@@ -22,9 +22,6 @@ From: ubuntu:22.04
         sudo \
         && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-    echo "=== Removing conflicting Node packages ==="
-    apt-get remove -y nodejs npm libnode-dev || true
-
     echo "=== Installing Node 20 ==="
     curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
     apt-get install -y nodejs
@@ -35,12 +32,13 @@ From: ubuntu:22.04
     python3 -m venv /opt/venv
     /opt/venv/bin/pip install --upgrade pip setuptools wheel
 
-    echo "=== Copying application source ==="
+    echo "=== Copying application source (dev) ==="
     mkdir -p /opt/llm-web-app
     cp -r /tmp/llm-web-app/* /opt/llm-web-app/
 
     echo "=== Installing backend requirements ==="
-    /opt/venv/bin/pip install -r /opt/llm-web-app/backend/requirements.txt
+    cd /opt/llm-web-app/backend
+    /opt/venv/bin/pip install -r requirements.txt
 
     echo "=== Installing frontend dependencies ==="
     cd /opt/llm-web-app/frontend
@@ -49,11 +47,13 @@ From: ubuntu:22.04
 %environment
     export PATH="/opt/venv/bin:$PATH"
     export NODE_PATH="/usr/lib/node_modules"
+    export DJANGO_SETTINGS_MODULE=backend.settings
+    export PYTHONUNBUFFERED=1
+    export NODE_ENV=development
 
 %runscript
-    echo "=== Running LLM Web App ==="
+    echo "=== Running LLM Web App (Development) ==="
     cd /opt/llm-web-app
-    # Use concurrently to run Django backend + React frontend
     concurrently \
         "/opt/venv/bin/python backend/manage.py runserver 0.0.0.0:8000" \
-        "cd frontend && npm run dev"
+        "cd frontend && npm run dev -- --host 0.0.0.0 --port 3000"
