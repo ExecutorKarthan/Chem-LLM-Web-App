@@ -1,59 +1,182 @@
 Bootstrap: docker
-From: ubuntu:22.04
+From: rockylinux:8
 
 %labels
-    Author Alex Messina
-    Version 1.0
-    Description LLM Web App container (Development)
-
-%post
-    echo "=== Updating base system ==="
-    apt-get update && apt-get upgrade -y
-
-    echo "=== Installing prerequisites ==="
-    DEBIAN_FRONTEND=noninteractive apt-get install -y \
-        curl \
-        gnupg \
-        apt-transport-https \
-        build-essential \
-        python3-pip \
-        python3-venv \
-        git \
-        sudo \
-        && apt-get clean && rm -rf /var/lib/apt/lists/*
-
-    echo "=== Installing Node 20 ==="
-    curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
-    apt-get install -y nodejs
-    npm install -g npm@latest
-    npm install -g concurrently
-
-    echo "=== Setting up Python virtual environment ==="
-    python3 -m venv /opt/venv
-    /opt/venv/bin/pip install --upgrade pip setuptools wheel
-
-    echo "=== Copying application source (dev) ==="
-    mkdir -p /opt/llm-web-app
-    cp -r /tmp/llm-web-app/* /opt/llm-web-app/
-
-    echo "=== Installing backend requirements ==="
-    cd /opt/llm-web-app/backend
-    /opt/venv/bin/pip install -r requirements.txt
-
-    echo "=== Installing frontend dependencies ==="
-    cd /opt/llm-web-app/frontend
-    npm install
+    Author Xander
 
 %environment
-    export PATH="/opt/venv/bin:$PATH"
-    export NODE_PATH="/usr/lib/node_modules"
-    export DJANGO_SETTINGS_MODULE=backend.settings
+    export LANG=C.UTF-8
+    export PATH=/usr/local/bin:$PATH
     export PYTHONUNBUFFERED=1
-    export NODE_ENV=development
+    export NODE_ENV=production
+    export APP_HOME=/opt/app
+
+%post
+    set -e
+
+    ############################################################
+    # 1. Update system and install essential tools
+    ############################################################
+    echo "=== Updating system and installing essential tools ==="
+    dnf -y update
+    dnf -y install epel-release
+    dnf -y install git wget curl tar gzip bzip2 make gcc gcc-c++ which sudo \
+        openssl-devel bzip2-devel xz-devel zlib-devel libffi-devel readline-devel \
+        sqlite-devel findutils || { echo "❌ Failed to install system packages"; exit 1; }
+
+    # Verify wget is installed
+    if ! command -v wget &>/dev/null; then
+        echo "❌ wget not found after installation, aborting build"
+        exit 1
+    fi
+    echo "✅ wget installed successfully"
+
+    ############################################################
+    # 2. Create app directories
+    ############################################################
+    echo "=== Creating /opt/app directory ==="
+    APP_HOME=/opt/app             
+    mkdir -p "$APP_HOME/backend" "$APP_HOME/frontend"
+    chmod -R 777 "$APP_HOME"
+
+    ############################################################
+    # 3. Clone LLM-Web-App repo if missing
+    ############################################################
+    echo "=== Cloning LLM-Web-App repo if missing ==="
+    cd "$APP_HOME"
+    if [ ! -d "$APP_HOME/LLM-Web-App" ]; then
+        git clone https://github.com/ExecutorKarthan/LLM-Web-App.git
+    fi
+
+    ############################################################
+    # 4. Install Python 3.11 if missing
+    ############################################################
+    echo "=== Installing Python 3.11 if missing ==="
+    if ! command -v python3.11 &>/dev/null; then
+        cd /tmp
+        wget -q https://www.python.org/ftp/python/3.11.9/Python-3.11.9.tgz
+        tar -xzf Python-3.11.9.tgz
+        cd Python-3.11.9
+        ./configure --enable-optimizations --with-ensurepip=install
+        make -j$(nproc)
+        make altinstall
+    fi
+    alternatives --install /usr/bin/python3 python3 /usr/local/bin/python3.11 1 || true
+    alternatives --install /usr/bin/pip3 pip3 /usr/local/bin/pip3.11 1 || true
+
+    ############################################################
+    # 5. Install Node.js 20 and latest NPM + Yarn
+    ############################################################
+    echo "=== Installing Node.js 20 and Yarn ==="
+    if ! command -v node &>/dev/null; then
+        curl -fsSL https://rpm.nodesource.com/setup_20.x | bash -
+        dnf -y install nodejs || true
+    fi
+    npm install -g npm@latest
+    npm install -g yarn@latest
+
+    ############################################################
+    # 6. Upgrade SQLite if needed
+    ############################################################
+    SQLITE_VERSION=$(sqlite3 --version 2>/dev/null || echo "0")
+    if [[ "$SQLITE_VERSION" < "3.41" ]]; then
+        echo "=== Installing SQLite >= 3.41 ==="
+        cd /tmp
+        wget -q https://www.sqlite.org/2023/sqlite-autoconf-3410200.tar.gz
+        tar -xzf sqlite-autoconf-3410200.tar.gz
+        cd sqlite-autoconf-3410200
+        ./configure --prefix=/usr/local
+        make -j$(nproc)
+        make install
+        ldconfig
+    fi
+
+    ############################################################
+    # 7. Backend setup with full self-healing
+    ############################################################
+    BACKEND_DIR="$APP_HOME/LLM-Web-App/backend"
+    if [ -d "$BACKEND_DIR" ]; then
+        cd "$BACKEND_DIR"
+        echo "=== Setting up Python virtual environment ==="
+        rm -rf venv
+        python3 -m venv venv
+        source venv/bin/activate
+        pip install --upgrade pip setuptools wheel
+
+        if [ -f requirements.txt ]; then
+            echo "=== Installing backend requirements with self-healing ==="
+            
+            # Auto-fix known problematic packages
+            sed -i 's/annotated-types==0.7.0/annotated-types>=0.9.0/' requirements.txt || true
+
+            # Attempt normal install, fallback to per-package
+            pip install -r requirements.txt || {
+                echo "⚠️ Some packages failed, attempting per-package install..."
+                while read -r pkg; do
+                    [[ "$pkg" =~ ^#.*$ ]] && continue
+                    [[ -z "$pkg" ]] && continue
+                    echo "Installing $pkg..."
+                    pip install "$pkg" || echo "⚠️ Failed to install $pkg, skipping..."
+                done < requirements.txt
+            }
+        else
+            pip install django python-dotenv django-cors-headers
+        fi
+    else
+        echo "⚠️ Backend directory not found, skipping backend setup"
+    fi
+
+    ############################################################
+    # 8. Frontend setup
+    ############################################################
+    FRONTEND_DIR="$APP_HOME/LLM-Web-App/frontend"
+    if [ -d "$FRONTEND_DIR" ]; then
+        cd "$FRONTEND_DIR"
+        if [ -f package.json ]; then
+            echo "=== Installing frontend dependencies ==="
+            yarn install --frozen-lockfile || true
+            echo "=== Building frontend ==="
+            yarn build || true
+        else
+            echo "⚠️ Frontend package.json not found, skipping build"
+        fi
+    else
+        echo "⚠️ Frontend directory not found, skipping frontend setup"
+    fi
 
 %runscript
-    echo "=== Running LLM Web App (Development) ==="
-    cd /opt/llm-web-app
-    concurrently \
-        "/opt/venv/bin/python backend/manage.py runserver 0.0.0.0:8000" \
-        "cd frontend && npm run dev -- --host 0.0.0.0 --port 3000"
+    echo "=== Starting LLM-Web-App container ==="
+    echo "APP_HOME is: $APP_HOME"
+
+    BACKEND_DIR="$APP_HOME/LLM-Web-App/backend"
+    FRONTEND_DIR="$APP_HOME/LLM-Web-App/frontend"
+
+    echo "=== Listing app directory contents ==="
+    ls -l "$APP_HOME"
+
+    ############################################################
+    # Start Django backend
+    ############################################################
+    if [ -f "$BACKEND_DIR/manage.py" ]; then
+        echo "=== Starting Django backend on :8000 ==="
+        cd "$BACKEND_DIR"
+        source venv/bin/activate
+        python manage.py runserver 0.0.0.0:8000 &
+    else
+        echo "⚠️ Backend manage.py not found, skipping Django start"
+    fi
+
+    ############################################################
+    # Start React frontend
+    ############################################################
+    if [ -f "$FRONTEND_DIR/package.json" ]; then
+        echo "=== Starting React frontend on :3000 ==="
+        cd "$FRONTEND_DIR"
+        if [ -d dist ]; then
+            python3 -m http.server 3000
+        else
+            yarn dev --host 0.0.0.0 --port 3000
+        fi
+    else
+        echo "⚠️ Frontend not found, skipping React start"
+    fi

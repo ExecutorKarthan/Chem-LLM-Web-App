@@ -1,18 +1,17 @@
-#!/usr/bin/env bash
-set -e
+#!/bin/bash
+# start-app.sh
 
-# Point to system config instead of $HOME/etc
-export APPTAINER_CONF=/etc/apptainer/apptainer.conf
+echo "Starting Django backend on :8000..."
+cd /opt/app/backend
 
-# Build image (only if you want to rebuild each time)
-apptainer build --force llm-web-app.sif llm-web-app.def
+# Start Django backend in the background
+python3 manage.py runserver 0.0.0.0:8000 &
 
-# Run both backend and frontend inside the container
-apptainer exec \
-  --bind "$(pwd):/opt/llm" \
-  llm-web-app.sif \
-  bash -c "
-    cd /opt/llm &&
-    npm install &&
-    npm start
-  "
+# Wait a few seconds to ensure backend is up
+sleep 5
+
+echo "Starting React frontend on :3000..."
+cd /opt/app/frontend
+
+# Start React dev server
+yarn dev --host 0.0.0.0 --port 3000

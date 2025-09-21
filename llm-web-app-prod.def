@@ -6,6 +6,9 @@ From: ubuntu:22.04
     Version 1.0
     Description LLM Web App container (Production)
 
+%files
+    ./ /opt/llm-web-app
+
 %post
     echo "=== Updating base system ==="
     apt-get update && apt-get upgrade -y
