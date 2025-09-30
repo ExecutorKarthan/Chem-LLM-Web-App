@@ -13,29 +13,23 @@ From: rockylinux:8
 
 %post
     set -e
-
     ############################################################
     # 1. Update system and install essential tools
     ############################################################
     echo "=== Updating system and installing essential tools ==="
+    dnf clean all
     dnf -y update
     dnf -y install epel-release
-    dnf -y install git wget curl tar gzip bzip2 make gcc gcc-c++ which sudo \
+    dnf -y install vim git wget curl tar gzip bzip2 make gcc gcc-c++ which sudo \
         openssl-devel bzip2-devel xz-devel zlib-devel libffi-devel readline-devel \
         sqlite-devel findutils || { echo "❌ Failed to install system packages"; exit 1; }
-
-    # Verify wget is installed
-    if ! command -v wget &>/dev/null; then
-        echo "❌ wget not found after installation, aborting build"
-        exit 1
-    fi
-    echo "✅ wget installed successfully"
+    dnf clean all
 
     ############################################################
     # 2. Create app directories
     ############################################################
     echo "=== Creating /opt/app directory ==="
-    APP_HOME=/opt/app             
+    APP_HOME=/opt/app
     mkdir -p "$APP_HOME/backend" "$APP_HOME/frontend"
     chmod -R 777 "$APP_HOME"
 
@@ -49,23 +43,31 @@ From: rockylinux:8
     fi
 
     ############################################################
-    # 4. Install Python 3.11 if missing
+    # 4. Install Python 3.12
     ############################################################
-    echo "=== Installing Python 3.11 if missing ==="
-    if ! command -v python3.11 &>/dev/null; then
-        cd /tmp
-        wget -q https://www.python.org/ftp/python/3.11.9/Python-3.11.9.tgz
-        tar -xzf Python-3.11.9.tgz
-        cd Python-3.11.9
-        ./configure --enable-optimizations --with-ensurepip=install
-        make -j$(nproc)
-        make altinstall
-    fi
-    alternatives --install /usr/bin/python3 python3 /usr/local/bin/python3.11 1 || true
-    alternatives --install /usr/bin/pip3 pip3 /usr/local/bin/pip3.11 1 || true
+    echo "=== Installing Python 3.12 ==="
+    PYTHON_VERSION=3.12.0
+    PYTHON_INSTALL_DIR=/opt/python-$PYTHON_VERSION
+
+    cd /tmp
+    wget -q https://www.python.org/ftp/python/$PYTHON_VERSION/Python-$PYTHON_VERSION.tgz
+    tar xzf Python-$PYTHON_VERSION.tgz
+    cd Python-$PYTHON_VERSION
+    ./configure --prefix=$PYTHON_INSTALL_DIR --enable-optimizations
+    make -j$(nproc)
+    make altinstall
+
+    # --- Configure alternatives ---
+    PY_SHORT=$(echo $PYTHON_VERSION | cut -d. -f1,2)
+    alternatives --install /usr/bin/python3 python3 $PYTHON_INSTALL_DIR/bin/python$PY_SHORT 2
+    alternatives --install /usr/bin/pip3 pip3 $PYTHON_INSTALL_DIR/bin/pip$PY_SHORT 2
+
+    # --- Ensure pip is ready ---
+    $PYTHON_INSTALL_DIR/bin/python$PY_SHORT -m ensurepip --upgrade
+    $PYTHON_INSTALL_DIR/bin/python$PY_SHORT -m pip install --upgrade pip setuptools wheel
 
     ############################################################
-    # 5. Install Node.js 20 and latest NPM + Yarn
+    # 5. Install Node.js 20 and Yarn
     ############################################################
     echo "=== Installing Node.js 20 and Yarn ==="
     if ! command -v node &>/dev/null; then
@@ -76,40 +78,40 @@ From: rockylinux:8
     npm install -g yarn@latest
 
     ############################################################
-    # 6. Upgrade SQLite if needed
+    # 6. Upgrade SQLite >= 3.41
     ############################################################
-    SQLITE_VERSION=$(sqlite3 --version 2>/dev/null || echo "0")
-    if [[ "$SQLITE_VERSION" < "3.41" ]]; then
-        echo "=== Installing SQLite >= 3.41 ==="
-        cd /tmp
-        wget -q https://www.sqlite.org/2023/sqlite-autoconf-3410200.tar.gz
-        tar -xzf sqlite-autoconf-3410200.tar.gz
-        cd sqlite-autoconf-3410200
-        ./configure --prefix=/usr/local
-        make -j$(nproc)
-        make install
-        ldconfig
-    fi
+    echo "=== Installing SQLite >= 3.41 ==="
+    cd /tmp
+    wget -q https://www.sqlite.org/2023/sqlite-autoconf-3410200.tar.gz
+    tar -xzf sqlite-autoconf-3410200.tar.gz
+    cd sqlite-autoconf-3410200
+    ./configure --prefix=/usr/local
+    make -j$(nproc)
+    make install
+    ldconfig
+
+    # Remove old SQL and add the alternative
+    alternatives --remove sqlite3 /usr/bin/sqlite3 || true
+    alternatives --install /usr/bin/sqlite3 sqlite3 /usr/local/bin/sqlite3 50
+    echo "/usr/local/lib" > /etc/ld.so.conf.d/sqlite3.conf
+    ldconfig
 
     ############################################################
-    # 7. Backend setup with full self-healing
+    # 7. Backend setup with venv (Python 3.12 only)
     ############################################################
     BACKEND_DIR="$APP_HOME/LLM-Web-App/backend"
+
     if [ -d "$BACKEND_DIR" ]; then
         cd "$BACKEND_DIR"
         echo "=== Setting up Python virtual environment ==="
         rm -rf venv
-        python3 -m venv venv
+        $PYTHON_INSTALL_DIR/bin/python$PY_SHORT -m venv venv
         source venv/bin/activate
         pip install --upgrade pip setuptools wheel
 
         if [ -f requirements.txt ]; then
-            echo "=== Installing backend requirements with self-healing ==="
-            
-            # Auto-fix known problematic packages
+            echo "=== Installing backend requirements ==="
             sed -i 's/annotated-types==0.7.0/annotated-types>=0.9.0/' requirements.txt || true
-
-            # Attempt normal install, fallback to per-package
             pip install -r requirements.txt || {
                 echo "⚠️ Some packages failed, attempting per-package install..."
                 while read -r pkg; do
@@ -122,6 +124,17 @@ From: rockylinux:8
         else
             pip install django python-dotenv django-cors-headers
         fi
+
+        # Ensure staticfiles_collected exists and is writable
+        mkdir -p "$BACKEND_DIR/staticfiles_collected"
+        chmod -R 777 "$BACKEND_DIR/staticfiles_collected"
+
+        # Run collectstatic safely
+        cd "$BACKEND_DIR"
+        source venv/bin/activate
+        python manage.py collectstatic --noinput || true
+
+        deactivate
     else
         echo "⚠️ Backend directory not found, skipping backend setup"
     fi
@@ -144,6 +157,8 @@ From: rockylinux:8
         echo "⚠️ Frontend directory not found, skipping frontend setup"
     fi
 
+    python3 --version
+
 %runscript
     echo "=== Starting LLM-Web-App container ==="
     echo "APP_HOME is: $APP_HOME"
@@ -155,21 +170,35 @@ From: rockylinux:8
     ls -l "$APP_HOME"
 
     ############################################################
-    # Start Django backend
+    # Trap to clean up background Django server on exit
+    ############################################################
+    trap "echo '=== Stopping Django server...'; kill 0" EXIT
+
+    ############################################################
+    # Start Django backend first
     ############################################################
     if [ -f "$BACKEND_DIR/manage.py" ]; then
         echo "=== Starting Django backend on :8000 ==="
         cd "$BACKEND_DIR"
         source venv/bin/activate
+
+        python manage.py migrate --noinput || true
+        python manage.py collectstatic --noinput || true
+
+        # Run server in background
         python manage.py runserver 0.0.0.0:8000 &
+        DJANGO_PID=$!
     else
         echo "⚠️ Backend manage.py not found, skipping Django start"
     fi
 
     ############################################################
-    # Start React frontend
+    # Start React frontend only if Django is running
     ############################################################
     if [ -f "$FRONTEND_DIR/package.json" ]; then
+        echo "=== Waiting for Django to be ready ==="
+        sleep 5  # simple wait, could replace with a health check
+
         echo "=== Starting React frontend on :3000 ==="
         cd "$FRONTEND_DIR"
         if [ -d dist ]; then
