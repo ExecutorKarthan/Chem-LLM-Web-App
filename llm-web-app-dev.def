@@ -13,10 +13,15 @@ From: rockylinux:8
 
 %post
     set -e
+    APP_HOME=/opt/app
+    echo "=== Creating /opt/app directory ==="
+    mkdir -p "$APP_HOME/backend" "$APP_HOME/frontend"
+    chmod -R 777 "$APP_HOME"
+    
     ############################################################
-    # 1. Update system and install essential tools
+    # 1. System update and essentials
     ############################################################
-    echo "=== Updating system and installing essential tools ==="
+    echo "=== System update and essentials ==="
     dnf clean all
     dnf -y update
     dnf -y install epel-release
@@ -28,15 +33,14 @@ From: rockylinux:8
     ############################################################
     # 2. Create app directories
     ############################################################
-    echo "=== Creating /opt/app directory ==="
-    APP_HOME=/opt/app
+    echo "=== Create App directories ==="
     mkdir -p "$APP_HOME/backend" "$APP_HOME/frontend"
     chmod -R 777 "$APP_HOME"
 
     ############################################################
-    # 3. Clone LLM-Web-App repo if missing
+    # 3. Clone LLM-Web-App repo
     ############################################################
-    echo "=== Cloning LLM-Web-App repo if missing ==="
+    echo "=== Cloning repo ==="
     cd "$APP_HOME"
     if [ ! -d "$APP_HOME/LLM-Web-App" ]; then
         git clone https://github.com/ExecutorKarthan/LLM-Web-App.git
@@ -45,10 +49,9 @@ From: rockylinux:8
     ############################################################
     # 4. Install Python 3.12
     ############################################################
-    echo "=== Installing Python 3.12 ==="
+    echo "=== Installing Python ==="
     PYTHON_VERSION=3.12.0
     PYTHON_INSTALL_DIR=/opt/python-$PYTHON_VERSION
-
     cd /tmp
     wget -q https://www.python.org/ftp/python/$PYTHON_VERSION/Python-$PYTHON_VERSION.tgz
     tar xzf Python-$PYTHON_VERSION.tgz
@@ -57,22 +60,21 @@ From: rockylinux:8
     make -j$(nproc)
     make altinstall
 
-    # --- Configure alternatives ---
     PY_SHORT=$(echo $PYTHON_VERSION | cut -d. -f1,2)
+    
     alternatives --install /usr/bin/python3 python3 $PYTHON_INSTALL_DIR/bin/python$PY_SHORT 2
     alternatives --install /usr/bin/pip3 pip3 $PYTHON_INSTALL_DIR/bin/pip$PY_SHORT 2
-
-    # --- Ensure pip is ready ---
+    
     $PYTHON_INSTALL_DIR/bin/python$PY_SHORT -m ensurepip --upgrade
     $PYTHON_INSTALL_DIR/bin/python$PY_SHORT -m pip install --upgrade pip setuptools wheel
 
     ############################################################
-    # 5. Install Node.js 20 and Yarn
+    # 5. Install Node.js 20 + Yarn
     ############################################################
-    echo "=== Installing Node.js 20 and Yarn ==="
+    echo "=== Installing Node ==="
     if ! command -v node &>/dev/null; then
         curl -fsSL https://rpm.nodesource.com/setup_20.x | bash -
-        dnf -y install nodejs || true
+        dnf -y install nodejs
     fi
     npm install -g npm@latest
     npm install -g yarn@latest
@@ -80,7 +82,7 @@ From: rockylinux:8
     ############################################################
     # 6. Upgrade SQLite >= 3.41
     ############################################################
-    echo "=== Installing SQLite >= 3.41 ==="
+    echo "=== Upgrading SQLite ==="
     cd /tmp
     wget -q https://www.sqlite.org/2023/sqlite-autoconf-3410200.tar.gz
     tar -xzf sqlite-autoconf-3410200.tar.gz
@@ -89,79 +91,64 @@ From: rockylinux:8
     make -j$(nproc)
     make install
     ldconfig
-
-    # Remove old SQL and add the alternative
     alternatives --remove sqlite3 /usr/bin/sqlite3 || true
     alternatives --install /usr/bin/sqlite3 sqlite3 /usr/local/bin/sqlite3 50
     echo "/usr/local/lib" > /etc/ld.so.conf.d/sqlite3.conf
     ldconfig
 
     ############################################################
-    # 7. Backend setup with venv (Python 3.12 only)
+    # 7. Backend setup with venv
     ############################################################
+    echo "=== Setup Venv and Backend ==="
     BACKEND_DIR="$APP_HOME/LLM-Web-App/backend"
-
+    cd "$APP_HOME/LLM-Web-App/backend"
     if [ -d "$BACKEND_DIR" ]; then
         cd "$BACKEND_DIR"
-        echo "=== Setting up Python virtual environment ==="
+      
         rm -rf venv
         $PYTHON_INSTALL_DIR/bin/python$PY_SHORT -m venv venv
         source venv/bin/activate
         pip install --upgrade pip setuptools wheel
+        pip install django python-dotenv django-cors-headers
+
+        # Now we can generate .env
+        if [ ! -f .env ]; then
+            DJANGO_KEY=$(python3 -c 'from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())')
+            echo "DJANGO_SECRET_KEY=$DJANGO_KEY" > .env
+            echo "✅ Created .env with DJANGO_SECRET_KEY"
+        fi
 
         if [ -f requirements.txt ]; then
-            echo "=== Installing backend requirements ==="
             sed -i 's/annotated-types==0.7.0/annotated-types>=0.9.0/' requirements.txt || true
-            pip install -r requirements.txt || {
-                echo "⚠️ Some packages failed, attempting per-package install..."
-                while read -r pkg; do
-                    [[ "$pkg" =~ ^#.*$ ]] && continue
-                    [[ -z "$pkg" ]] && continue
-                    echo "Installing $pkg..."
-                    pip install "$pkg" || echo "⚠️ Failed to install $pkg, skipping..."
-                done < requirements.txt
-            }
+            pip install -r requirements.txt
         else
             pip install django python-dotenv django-cors-headers
         fi
 
-        # Ensure staticfiles_collected exists and is writable
         mkdir -p "$BACKEND_DIR/staticfiles_collected"
         chmod -R 777 "$BACKEND_DIR/staticfiles_collected"
 
-        # Run collectstatic safely
-        cd "$BACKEND_DIR"
-        source venv/bin/activate
         python manage.py collectstatic --noinput || true
-
         deactivate
-    else
-        echo "⚠️ Backend directory not found, skipping backend setup"
     fi
+
 
     ############################################################
     # 8. Frontend setup
     ############################################################
+    echo "=== Setup the Frontend ==="
     FRONTEND_DIR="$APP_HOME/LLM-Web-App/frontend"
     if [ -d "$FRONTEND_DIR" ]; then
         cd "$FRONTEND_DIR"
         if [ -f package.json ]; then
-            echo "=== Installing frontend dependencies ==="
-            yarn install --frozen-lockfile || true
-            echo "=== Building frontend ==="
-            yarn build || true
-        else
-            echo "⚠️ Frontend package.json not found, skipping build"
+            yarn install --frozen-lockfile
+            yarn build  # <- no || true, so failures are visible
         fi
-    else
-        echo "⚠️ Frontend directory not found, skipping frontend setup"
     fi
-
-    python3 --version
 
 %runscript
     echo "=== Starting LLM-Web-App container ==="
-    echo "APP_HOME is: $APP_HOME"
+    echo "APP_HOME: $APP_HOME"
 
     BACKEND_DIR="$APP_HOME/LLM-Web-App/backend"
     FRONTEND_DIR="$APP_HOME/LLM-Web-App/frontend"
@@ -169,43 +156,34 @@ From: rockylinux:8
     echo "=== Listing app directory contents ==="
     ls -l "$APP_HOME"
 
-    ############################################################
     # Trap to clean up background Django server on exit
-    ############################################################
     trap "echo '=== Stopping Django server...'; kill 0" EXIT
 
     ############################################################
-    # Start Django backend first
+    # Start Django backend
     ############################################################
+    echo "=== Start Django ==="
     if [ -f "$BACKEND_DIR/manage.py" ]; then
-        echo "=== Starting Django backend on :8000 ==="
         cd "$BACKEND_DIR"
         source venv/bin/activate
 
         python manage.py migrate --noinput || true
         python manage.py collectstatic --noinput || true
 
-        # Run server in background
         python manage.py runserver 0.0.0.0:8000 &
-        DJANGO_PID=$!
+    fi   
+
+    ############################################################
+    # Serve React production build
+    ############################################################
+    echo "=== Serve React ==="
+    FRONTEND_BUILD_DIR="$FRONTEND_DIR/build"
+    if [ -d "$FRONTEND_BUILD_DIR" ]; then
+        echo "=== Serving React build on :3000 ==="
+        cd "$FRONTEND_BUILD_DIR"
+        python3 -m http.server 3000
     else
-        echo "⚠️ Backend manage.py not found, skipping Django start"
-    fi
-
-    ############################################################
-    # Start React frontend only if Django is running
-    ############################################################
-    if [ -f "$FRONTEND_DIR/package.json" ]; then
-        echo "=== Waiting for Django to be ready ==="
-        sleep 5  # simple wait, could replace with a health check
-
-        echo "=== Starting React frontend on :3000 ==="
+        echo "=== Build not found, starting dev server ==="
         cd "$FRONTEND_DIR"
-        if [ -d dist ]; then
-            python3 -m http.server 3000
-        else
-            yarn dev --host 0.0.0.0 --port 3000
-        fi
-    else
-        echo "⚠️ Frontend not found, skipping React start"
+        yarn dev --host 0.0.0.0 --port 3000
     fi

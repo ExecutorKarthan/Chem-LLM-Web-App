@@ -7,8 +7,11 @@ from corsheaders.defaults import default_headers
 
 # Load environmental variables from the '.env' file and define them
 load_dotenv()
+
 GEMINI_KEY = os.getenv("GEMINI_KEY")
 SECRET_KEY = os.getenv("DJANGO_SECRET_KEY")
+if not SECRET_KEY:
+    raise Exception("DJANGO_SECRET_KEY not set! .env file missing?")
 DEBUG = os.getenv("DEBUG") == "True"
 
 # Define directory pathing
