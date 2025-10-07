@@ -1,0 +1,65 @@
+Bootstrap: docker
+From: rockylinux:8
+
+%labels
+    Author Xander
+    Description React Frontend Setup for LLM-Web-App
+
+%environment
+    export LANG=C.UTF-8
+    export PATH=/usr/local/bin:$PATH
+    export APP_HOME=/opt/app/LLM-Web-App/frontend
+
+%post
+    set -e
+
+    ############################################################
+    # 1. System update and essentials
+    ############################################################
+    dnf -y install git wget curl tar gzip make gcc gcc-c++  
+
+    ############################################################
+    # 2. Installing Node.js 20 + Yarn
+    ############################################################
+    curl -fsSL https://rpm.nodesource.com/setup_20.x | bash -
+    dnf -y install nodejs
+    npm install -g yarn@latest
+
+    ############################################################
+    # 3. Clone repository (specific branch)
+    ############################################################
+    mkdir -p /opt/app
+    cd /opt/app
+    if [ ! -d "LLM-Web-App" ]; then
+        git clone --branch apptainer-deploy --single-branch https://github.com/ExecutorKarthan/LLM-Web-App.git
+    else
+        echo "✅ Repo already exists, skipping clone."
+        cd LLM-Web-App
+        git fetch origin apptainer-deploy
+        git checkout apptainer-deploy
+        git pull origin apptainer-deploy
+    fi
+
+
+    ############################################################
+    # 4. Installing frontend dependencies
+    ############################################################
+    cd /opt/app/LLM-Web-App/frontend
+    yarn install --frozen-lockfile
+
+    ############################################################
+    # 5. Building React app
+    ############################################################
+    yarn build || { echo "❌ React build failed"; exit 1; }
+
+%runscript
+    ############################################################
+    # 1. Run React frontend
+    ############################################################
+    echo "=== Starting React Frontend ==="
+    cd /opt/app/LLM-Web-App/frontend
+    if [ ! -d build ]; then
+        echo "❌ React build not found!"
+        exit 1
+    fi
+    python3 -m http.server 3000

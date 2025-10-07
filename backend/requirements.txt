@@ -1,4 +1,4 @@
-annotated-types==0.7.0
+annotated-types>=0.7.0
 anyio==4.10.0
 asarPy==1.0.1
 asgiref==3.8.1
