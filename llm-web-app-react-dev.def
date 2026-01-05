@@ -7,7 +7,7 @@ From: rockylinux:8
 
 %environment
     export LANG=C.UTF-8
-    export PATH=/usr/local/bin:$PATH
+    export PATH=/usr/local/bin:~/.yarn/bin:$PATH
     export APP_HOME=/opt/app/LLM-Web-App/frontend
 
 %post
@@ -16,13 +16,17 @@ From: rockylinux:8
     ############################################################
     # 1. System update and essentials
     ############################################################
-    dnf -y install git wget curl tar gzip make gcc gcc-c++  
+    dnf -y install git wget curl tar gzip make gcc gcc-c++ python3
 
     ############################################################
     # 2. Installing Node.js 20 + Yarn
     ############################################################
-    curl -fsSL https://rpm.nodesource.com/setup_20.x | bash -
-    dnf -y install nodejs
+    echo "=== Installing Node ==="
+    if ! command -v node &>/dev/null; then
+        curl -fsSL https://rpm.nodesource.com/setup_20.x | bash -
+        dnf -y install nodejs
+    fi
+    npm install -g npm@latest
     npm install -g yarn@latest
 
     ############################################################
@@ -40,7 +44,6 @@ From: rockylinux:8
         git pull origin apptainer-deploy
     fi
 
-
     ############################################################
     # 4. Installing frontend dependencies
     ############################################################
@@ -50,11 +53,12 @@ From: rockylinux:8
     ############################################################
     # 5. Building React app
     ############################################################
+    echo "=== Building React app ==="
     yarn build || { echo "❌ React build failed"; exit 1; }
 
 %runscript
     ############################################################
-    # 1. Run React frontend
+    # 1. Serve React frontend
     ############################################################
     echo "=== Starting React Frontend ==="
     cd /opt/app/LLM-Web-App/frontend
@@ -62,4 +66,6 @@ From: rockylinux:8
         echo "❌ React build not found!"
         exit 1
     fi
-    python3 -m http.server 3000
+
+    echo "Serving React build folder on http://0.0.0.0:3000"
+    python3 -m http.server 3000 --directory build

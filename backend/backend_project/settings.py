@@ -29,7 +29,7 @@ ALLOWED_HOSTS = [
     "llm-web-app-backend.onrender.com",
     "localhost",
     "llmexplorer.engr.wustl.edu",
-    "http://127.0.0.1:8000/",                 
+    "127.0.0.1",                 
 ]
 
 # Application definition
@@ -47,9 +47,9 @@ INSTALLED_APPS = [
 
 # Define programs to handle interactions
 MIDDLEWARE = [
+    'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',
-    'corsheaders.middleware.CorsMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -58,16 +58,22 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 
-# Allow CORS to operate depending on origins
+# Allow CORS to operate depending on origins - be sure to define your ports!
 CORS_ALLOWED_ORIGINS = [
-    "https://llm-web-app-4970.onrender.com",
-    "http://localhost:32780",
-    "https://llmexplorer.engr.wustl.edu:32780",
+    #Dev Settings
+    'http://localhost:32780',
+    'http://127.0.0.1:8000', 
+
+    #Production settings
+    'http://llm-web-app-4970.onrender.com',
+    'http://llmexplorer.engr.wustl.edu',
 ]
+
+# CORS_ALLOW_ALL_ORIGINS = True
 
 # Permit the custom header for tokens
 CORS_ALLOW_HEADERS = list(default_headers) + [
-    "X-Token",  # Add your custom header here (case insensitive)
+    'X-Token',  # Add your custom header here (case insensitive)
 ]
 
 # Allow cookies to be used
@@ -75,9 +81,13 @@ CORS_ALLOW_CREDENTIALS = True
 
 # Define trusted origins for cookies
 CSRF_TRUSTED_ORIGINS = [
-    "https://llm-web-app-4970.onrender.com/", 
-    "https://llmexplorer.engr.wustl.edu:32780", 
-    "http://localhost:5173",
+    #Dev Settings
+    'http://localhost:32780',
+    'http://127.0.0.1:8000', 
+
+    #Production settings
+    'http://llm-web-app-4970.onrender.com',
+    'http://llmexplorer.engr.wustl.edu',
 ]
 
 # Defines locations for URL routs and how to render HTML

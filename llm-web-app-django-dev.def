@@ -3,21 +3,22 @@ From: rockylinux:8
 
 %labels
     Author Xander
+    Description Django-only LLM-Web-App Development Container
 
 %environment
     export LANG=C.UTF-8
     export PATH=/usr/local/bin:$PATH
     export PYTHONUNBUFFERED=1
     export APP_HOME=/opt/app
+    export DJANGO_PORT=8000
 
 %post
     set -e
-    APP_HOME=/opt/app
 
     ############################################################
     # 1. System update and essentials
     ############################################################
-    echo "=== System update and essentials ==="
+    echo "=== Installing system packages ==="
     dnf clean all
     dnf -y update
     dnf -y install epel-release
@@ -27,20 +28,16 @@ From: rockylinux:8
     dnf clean all
 
     ############################################################
-    # 2. Create app directories
+    # 2. Clone LLM-Web-App repo (apptainer-deploy branch)
     ############################################################
-    echo "=== Create app directories ==="
-    mkdir -p "$APP_HOME/backend" "$APP_HOME/frontend"
-    chmod -R 777 "$APP_HOME"
-
-    ############################################################
-    # 3. Clone LLM-Web-App repo (apptainer-deploy branch)
-    ############################################################
-    REPO_URL="https://github.com/ExecutorKarthan/LLM-Web-App.git"
+    APP_HOME=${APP_HOME:-/opt/app}
+    mkdir -p "$APP_HOME"
     cd "$APP_HOME"
+
     if [ ! -d "$APP_HOME/LLM-Web-App" ]; then
-        echo "=== Cloning LLM-Web-App (apptainer-deploy branch) ==="
-        git clone --branch apptainer-deploy --single-branch $REPO_URL
+        echo "=== Cloning LLM-Web-App repo ==="
+        git clone --branch apptainer-deploy --single-branch \
+            https://github.com/ExecutorKarthan/LLM-Web-App.git
     else
         echo "✅ Repo already exists, skipping clone"
         cd LLM-Web-App
@@ -50,12 +47,12 @@ From: rockylinux:8
     fi
 
     ############################################################
-    # 4. Install Python 3.12
+    # 3. Install Python 3.12
     ############################################################
-    echo "=== Installing Python 3.12 ==="
     PYTHON_VERSION=3.12.0
     PYTHON_INSTALL_DIR=/opt/python-$PYTHON_VERSION
-    cd /tmp
+    mkdir -p /opt/app/tmp_build
+    cd /opt/app/tmp_build
     wget -q https://www.python.org/ftp/python/$PYTHON_VERSION/Python-$PYTHON_VERSION.tgz
     tar xzf Python-$PYTHON_VERSION.tgz
     cd Python-$PYTHON_VERSION
@@ -64,60 +61,75 @@ From: rockylinux:8
     make altinstall
 
     PY_SHORT=$(echo $PYTHON_VERSION | cut -d. -f1,2)
-
     alternatives --install /usr/bin/python3 python3 $PYTHON_INSTALL_DIR/bin/python$PY_SHORT 2
     alternatives --install /usr/bin/pip3 pip3 $PYTHON_INSTALL_DIR/bin/pip$PY_SHORT 2
-
     $PYTHON_INSTALL_DIR/bin/python$PY_SHORT -m ensurepip --upgrade
     $PYTHON_INSTALL_DIR/bin/python$PY_SHORT -m pip install --upgrade pip setuptools wheel
 
     ############################################################
-    # 5. Backend setup with venv
+    # 4. Upgrade SQLite >=3.41
+    ############################################################
+    cd /opt/app/tmp_build
+    wget -q https://www.sqlite.org/2023/sqlite-autoconf-3410200.tar.gz
+    tar xzf sqlite-autoconf-3410200.tar.gz
+    cd sqlite-autoconf-3410200
+    ./configure --prefix=/usr/local
+    make -j$(nproc)
+    make install
+    ldconfig
+    alternatives --remove sqlite3 /usr/bin/sqlite3 || true
+    alternatives --install /usr/bin/sqlite3 sqlite3 /usr/local/bin/sqlite3 50
+    echo "/usr/local/lib" > /etc/ld.so.conf.d/sqlite3.conf
+    ldconfig
+
+    ############################################################
+    # 5. Backend setup with virtual environment
     ############################################################
     BACKEND_DIR="$APP_HOME/LLM-Web-App/backend"
+    echo "=== Setting up Django backend ==="
     cd "$BACKEND_DIR"
 
-    echo "=== Setting up virtual environment ==="
     rm -rf venv
     $PYTHON_INSTALL_DIR/bin/python$PY_SHORT -m venv venv
     source venv/bin/activate
 
-    pip install --upgrade pip setuptools wheel
-    pip install django python-dotenv django-cors-headers
+    VENV_PY="$BACKEND_DIR/venv/bin/python"
+    VENV_PIP="$BACKEND_DIR/venv/bin/pip"
+
+    $VENV_PIP install --upgrade pip setuptools wheel
+    $VENV_PIP install django python-dotenv django-cors-headers
 
     if [ -f requirements.txt ]; then
         sed -i 's/annotated-types==0.7.0/annotated-types>=0.9.0/' requirements.txt || true
-        pip install -r requirements.txt
+        $VENV_PIP install -r requirements.txt
     fi
 
-    ############################################################
-    # 6. Generate .env with DJANGO_SECRET_KEY if missing
-    ############################################################
+    # Generate .env if missing
     if [ ! -f .env ]; then
-        echo "=== Creating .env with DJANGO_SECRET_KEY ==="
-        DJANGO_KEY=$(python3 -c 'from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())')
+        DJANGO_KEY=$($VENV_PY -c 'from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())')
         echo "DJANGO_SECRET_KEY=$DJANGO_KEY" > .env
-    else
-        echo "✅ .env already exists, skipping creation"
+        echo "✅ Created .env with DJANGO_SECRET_KEY"
     fi
 
-    ############################################################
-    # 7. Collect static files
-    ############################################################
+    # Ensure staticfiles directory exists
     mkdir -p "$BACKEND_DIR/staticfiles_collected"
     chmod -R 777 "$BACKEND_DIR/staticfiles_collected"
-    python manage.py collectstatic --noinput || true
+
+    # Collect static files
+    $VENV_PY manage.py collectstatic --noinput || true
+
     deactivate
 
 %runscript
     echo "=== Starting Django backend container ==="
     BACKEND_DIR="$APP_HOME/LLM-Web-App/backend"
     cd "$BACKEND_DIR"
+
     source venv/bin/activate
 
     echo "Running migrations..."
     python manage.py migrate --noinput || true
     python manage.py collectstatic --noinput || true
 
-    echo "Starting Django server on 0.0.0.0:8000"
-    python manage.py runserver 0.0.0.0:8000
+    echo "Starting Django server on 0.0.0.0:$DJANGO_PORT"
+    python manage.py runserver 0.0.0.0:$DJANGO_PORT
