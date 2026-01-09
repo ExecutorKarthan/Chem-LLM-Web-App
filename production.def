@@ -1,0 +1,215 @@
+Bootstrap: docker
+From: rockylinux:8
+
+%labels
+    Author Xander
+    Description Production LLM-Web-App (Django + React, read-only runtime)
+
+%environment
+    export LANG=C.UTF-8
+    export PYTHONUNBUFFERED=1
+    export APP_HOME=/opt/app/LLM-Web-App
+    export DJANGO_SETTINGS_MODULE=backend_project.settings
+    export DJANGO_STATIC_ROOT=/tmp/staticfiles_collected
+
+############################################
+# POST: BUILD IMAGE
+############################################
+%post
+    set -e
+
+    echo "=== System packages ==="
+    dnf clean all
+    dnf -y update
+    dnf -y install epel-release
+    dnf -y install \
+        git curl wget tar make gcc gcc-c++ \
+        openssl-devel bzip2-devel zlib-devel \
+        libffi-devel readline-devel sqlite-devel
+    dnf clean all
+
+    ############################################
+    # Clone repo
+    ############################################
+    mkdir -p /opt/app
+    cd /opt/app
+    git clone --branch apptainer-deploy --single-branch \
+        https://github.com/ExecutorKarthan/LLM-Web-App.git
+
+    ############################################
+    # Python 3.12 build
+    ############################################
+    PY_VER=3.12.0
+    PY_PREFIX=/opt/python
+
+    cd /tmp
+    wget -q https://www.python.org/ftp/python/${PY_VER}/Python-${PY_VER}.tgz
+    tar xzf Python-${PY_VER}.tgz
+    cd Python-${PY_VER}
+
+    ./configure --prefix=${PY_PREFIX}
+    make -j$(nproc)
+    make altinstall
+
+    ${PY_PREFIX}/bin/python3.12 -m ensurepip
+    ${PY_PREFIX}/bin/pip3.12 install --upgrade pip setuptools wheel
+
+    ############################################
+    # Django backend
+    ############################################
+    BACKEND=/opt/app/LLM-Web-App/backend
+    cd $BACKEND
+
+    ${PY_PREFIX}/bin/python3.12 -m venv venv
+    . venv/bin/activate
+
+    pip install --upgrade pip
+    pip install \
+        django>=5.2 \
+        python-dotenv \
+        django-cors-headers \
+        djangorestframework \
+        gunicorn \
+        whitenoise \
+        google-genai
+
+    # .env
+    if [ ! -f .env ]; then
+        DJANGO_KEY=$(python - <<EOF
+from django.core.management.utils import get_random_secret_key
+print(get_random_secret_key())
+EOF
+)
+        echo "DJANGO_SECRET_KEY=$DJANGO_KEY" > .env
+        echo "DJANGO_DEBUG=False" >> .env
+    fi
+
+    ############################################
+    # CREATE MISSING backend_project/views.py
+    ############################################
+    echo "=== Creating backend_project/views.py ==="
+    cat > $BACKEND/backend_project/views.py <<'VIEWSEOF'
+# backend_project/views.py
+from django.shortcuts import render
+from django.http import Http404
+from django.conf import settings
+from pathlib import Path
+import logging
+
+logger = logging.getLogger(__name__)
+
+def frontend(request):
+    """
+    Serve the React SPA index.html for all non-API routes.
+    """
+    # Calculate React build path dynamically
+    react_build_dir = Path(settings.BASE_DIR.parent) / "frontend" / "dist"
+    index_path = react_build_dir / "index.html"
+    
+    # Debug logging
+    logger.info(f"Looking for React build at: {react_build_dir}")
+    logger.info(f"Index.html exists: {index_path.exists()}")
+    
+    if not index_path.exists():
+        logger.error(f"React build not found at: {index_path}")
+        logger.error(f"BASE_DIR: {settings.BASE_DIR}")
+        logger.error(f"Expected parent: {settings.BASE_DIR.parent}")
+        raise Http404(f"React build not found. Expected at: {index_path}")
+    
+    # Use Django's render to serve the template
+    try:
+        return render(request, "index.html")
+    except Exception as e:
+        logger.error(f"Error rendering index.html: {e}")
+        raise Http404(f"Error serving React app: {e}")
+VIEWSEOF
+
+    ############################################
+    # FIX settings.py TEMPLATES and add cache
+    ############################################
+    echo "=== Fixing settings.py configuration ==="
+    
+    # Fix TEMPLATES DIRS to point to React build (note: single quotes in original)
+    sed -i "s|'DIRS': \[\]|'DIRS': ['/opt/app/LLM-Web-App/frontend/dist']|" $BACKEND/backend_project/settings.py
+    
+    # Also change APP_DIRS to False (required when DIRS is set)
+    sed -i "s|'APP_DIRS': True|'APP_DIRS': False|" $BACKEND/backend_project/settings.py
+    
+    # Add cache configuration
+    cat >> $BACKEND/backend_project/settings.py <<'SETTINGSEOF'
+
+############################################
+# Cache Configuration (for API token storage)
+############################################
+CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+        'LOCATION': 'unique-snowflake',
+        'TIMEOUT': 5400,  # 90 minutes
+    }
+}
+SETTINGSEOF
+    
+    # Verify the changes
+    echo "=== Verifying settings.py changes ==="
+    grep -A 3 "'DIRS':" $BACKEND/backend_project/settings.py
+    grep "'APP_DIRS':" $BACKEND/backend_project/settings.py
+
+    ############################################
+    # Static files (BUILD TIME ONLY)
+    ############################################
+    mkdir -p /tmp/staticfiles_collected
+    export DJANGO_STATIC_ROOT=/tmp/staticfiles_collected
+    python manage.py collectstatic --noinput --clear
+
+    deactivate
+
+    ############################################
+    # Node + React build
+    ############################################
+    curl -fsSL https://rpm.nodesource.com/setup_20.x | bash -
+    dnf -y install nodejs
+    npm install -g npm@latest
+
+    FRONTEND=/opt/app/LLM-Web-App/frontend
+    cd $FRONTEND
+
+    cat <<EOF > .env.production
+VITE_API_URL=http://localhost:8000
+EOF
+
+    npm install
+    npm run build
+
+    ############################################
+    # Verify build outputs
+    ############################################
+    echo "=== Verifying build outputs ==="
+    echo "React build:"
+    ls -la $FRONTEND/dist/ || echo "ERROR: React build failed!"
+    
+    echo ""
+    echo "backend_project/views.py:"
+    ls -la $BACKEND/backend_project/views.py || echo "ERROR: views.py missing!"
+    
+    echo ""
+    echo "Static files:"
+    ls -la /tmp/staticfiles_collected/ || echo "ERROR: Static files not collected!"
+
+############################################
+# RUNSCRIPT: READ-ONLY SAFE
+############################################
+%runscript
+    echo "=== Starting LLM-Web-App (Production) ==="
+
+    APP_HOME=/opt/app/LLM-Web-App
+    BACKEND=$APP_HOME/backend
+    VENV=$BACKEND/venv
+
+    exec $VENV/bin/gunicorn backend_project.wsgi:application \
+        --chdir $BACKEND \
+        --bind 0.0.0.0:8000 \
+        --workers 2 \
+        --threads 2 \
+        --worker-class gthread \
+        --log-level info
