@@ -86,7 +86,7 @@ CACHES = {
 ############################################
 # Static files (React build)
 ############################################
-STATIC_URL = "/static/"
+STATIC_URL = "/assets/"
 
 # Use environment variable for static root if set (read-only safe container)
 STATIC_ROOT = Path(os.environ.get("DJANGO_STATIC_ROOT", "/opt/app/LLM-Web-App/staticfiles"))
