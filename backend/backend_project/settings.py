@@ -70,6 +70,7 @@ CORS_ALLOW_CREDENTIALS = True
 
 CSRF_TRUSTED_ORIGINS = [
     'http://localhost:8000',
+    'http://localhost:32780',  # For local Vite dev server
     'http://llmexplorer.engr.wustl.edu',
 ]
 
