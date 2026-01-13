@@ -60,15 +60,16 @@ MIDDLEWARE = [
 # CORS / CSRF
 ############################################
 CORS_ALLOWED_ORIGINS = [
-    "http://localhost:8000",
-    'http://llmexplorer.engr.wustl.edu',
+    'http://localhost:8000',
+    'http://llmexplorer.engr.wustl.edu:8000',
+    'http://localhost:32780',
 ]
 
 CORS_ALLOW_HEADERS = list(default_headers) + ["X-Token"]
 CORS_ALLOW_CREDENTIALS = True
 
 CSRF_TRUSTED_ORIGINS = [
-    "http://localhost:8000",
+    'http://localhost:8000',
     'http://llmexplorer.engr.wustl.edu',
 ]
 

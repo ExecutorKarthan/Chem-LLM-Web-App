@@ -169,7 +169,7 @@ SETTINGSEOF
     cd $FRONTEND
 
     cat <<EOF > .env.production
-VITE_API_URL=http://localhost:8000
+VITE_BACKEND_URL_DEV=
 EOF
 
     npm install
