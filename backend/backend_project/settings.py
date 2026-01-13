@@ -89,7 +89,7 @@ CACHES = {
 STATIC_URL = "/static/"
 
 # Use environment variable for static root if set (read-only safe container)
-STATIC_ROOT = Path(os.environ.get("DJANGO_STATIC_ROOT", "/tmp/staticfiles_collected"))
+STATIC_ROOT = Path(os.environ.get("DJANGO_STATIC_ROOT", "/opt/app/LLM-Web-App/staticfiles"))
 
 # Only include asset-specific directories, not the full dist folder
 STATICFILES_DIRS = [

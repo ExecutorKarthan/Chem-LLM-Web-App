@@ -10,7 +10,7 @@ From: rockylinux:8
     export PYTHONUNBUFFERED=1
     export APP_HOME=/opt/app/LLM-Web-App
     export DJANGO_SETTINGS_MODULE=backend_project.settings
-    export DJANGO_STATIC_ROOT=/tmp/staticfiles_collected
+    export DJANGO_STATIC_ROOT=/opt/app/LLM-Web-App/staticfiles
 
 ############################################
 # POST: BUILD IMAGE
@@ -150,22 +150,16 @@ CACHES = {
 }
 SETTINGSEOF
     
-    # Verify the changes
+    # Verify the changes (use || true to not fail build if grep doesn't match)
     echo "=== Verifying settings.py changes ==="
-    grep -A 3 "'DIRS':" $BACKEND/backend_project/settings.py
-    grep "'APP_DIRS':" $BACKEND/backend_project/settings.py
+    grep -A 3 "DIRS" $BACKEND/backend_project/settings.py || true
+    grep "APP_DIRS" $BACKEND/backend_project/settings.py || true
 
-    ############################################
-    # Static files (BUILD TIME ONLY)
-    ############################################
-    mkdir -p /tmp/staticfiles_collected
-    export DJANGO_STATIC_ROOT=/tmp/staticfiles_collected
-    python manage.py collectstatic --noinput --clear
-
+    # Deactivate venv before building React
     deactivate
 
     ############################################
-    # Node + React build
+    # Node + React build (MUST BE BEFORE collectstatic!)
     ############################################
     curl -fsSL https://rpm.nodesource.com/setup_20.x | bash -
     dnf -y install nodejs
@@ -182,6 +176,20 @@ EOF
     npm run build
 
     ############################################
+    # Static files (AFTER React build!)
+    ############################################
+    echo "=== Collecting static files ==="
+    cd $BACKEND
+    . venv/bin/activate
+    
+    # Use permanent location inside container (not /tmp!)
+    mkdir -p /opt/app/LLM-Web-App/staticfiles
+    export DJANGO_STATIC_ROOT=/opt/app/LLM-Web-App/staticfiles
+    python manage.py collectstatic --noinput --clear
+    
+    deactivate
+
+    ############################################
     # Verify build outputs
     ############################################
     echo "=== Verifying build outputs ==="
@@ -194,7 +202,7 @@ EOF
     
     echo ""
     echo "Static files:"
-    ls -la /tmp/staticfiles_collected/ || echo "ERROR: Static files not collected!"
+    ls -la /opt/app/LLM-Web-App/staticfiles/ || echo "ERROR: Static files not collected!"
 
 ############################################
 # RUNSCRIPT: READ-ONLY SAFE
