@@ -61,6 +61,7 @@ MIDDLEWARE = [
 ############################################
 CORS_ALLOWED_ORIGINS = [
     'http://localhost:8000',
+    'http://127.0.0.1:8000',
     'http://llmexplorer.engr.wustl.edu:8000',
     'http://localhost:32780',
 ]
@@ -70,6 +71,7 @@ CORS_ALLOW_CREDENTIALS = True
 
 CSRF_TRUSTED_ORIGINS = [
     'http://localhost:8000',
+    'http://127.0.0.1:8000',
     'http://localhost:32780',  # For local Vite dev server
     'http://llmexplorer.engr.wustl.edu',
 ]
