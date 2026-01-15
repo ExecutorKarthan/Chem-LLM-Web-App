@@ -75,6 +75,12 @@ def tokenize_key(request):
         if not api_key:
             return JsonResponse({"error": "API key is required"}, status=400)
 
+        # Strip whitespace from API key
+        api_key = api_key.strip()
+        
+        print(f"Storing API key (length: {len(api_key)})")  # Debug
+        print(f"First 10 chars: {api_key[:10]}...")  # Debug (safe to show)
+
         token = str(uuid.uuid4())
         cache.set(token, api_key, timeout=5400)
 
@@ -96,6 +102,28 @@ def tokenize_key(request):
             status=500
         )
 
+############################################
+# List available models (DEBUG)
+############################################
+@api_view(["GET"])
+def list_models(request):
+    """Debug endpoint to list available Gemini models"""
+    token = request.COOKIES.get("gemini_token")
+    if not token:
+        return Response({"error": "No token"}, status=401)
+    
+    api_key = cache.get(token)
+    if not api_key:
+        return Response({"error": "Invalid token"}, status=403)
+    
+    try:
+        client = genai.Client(api_key=api_key)
+        models = client.models.list()
+        model_names = [model.name for model in models]
+        return Response({"models": model_names})
+    except Exception as e:
+        return Response({"error": str(e)}, status=500)
+
 
 ############################################
 # Gemini query endpoint
@@ -103,12 +131,11 @@ def tokenize_key(request):
 @api_view(["POST"])
 def ask_gemini(request, max_retries=2, delay=2):
     model_names = [
-        "gemini-2.5-pro",
+        "gemini-3-pro-preview",
+        "gemini-3-flash-preview",
         "gemini-2.5-flash",
-        "gemini-2.0-flash",
-        "gemini-2.0-flash-lite",
-        "gemini-1.5-pro",
-        "gemini-1.5-flash",
+        "gemini-2.5-flash-lite",
+        "gemini-2.5-pro",
     ]
 
     # Get token from cookie
@@ -125,6 +152,14 @@ def ask_gemini(request, max_retries=2, delay=2):
             {"error": "Invalid or expired token."},
             status=status.HTTP_403_FORBIDDEN,
         )
+
+    # Debug the API key
+    print(f"=== API Key Debug ===")
+    print(f"API key retrieved: {api_key is not None}")
+    print(f"API key length: {len(api_key) if api_key else 0}")
+    print(f"API key starts with: {api_key[:10] if api_key else 'N/A'}...")
+    print(f"API key type: {type(api_key)}")
+    print(f"====================")
 
     prompt = request.data.get("prompt")
     if not prompt:
@@ -152,13 +187,31 @@ def ask_gemini(request, max_retries=2, delay=2):
 
             except ClientError as e:
                 error_message = str(e)
+                print(f"=== ClientError Debug ===")
+                print(f"Error type: {type(e)}")
+                print(f"Error message: {error_message}")
+                if hasattr(e, 'status_code'):
+                    print(f"Status code: {e.status_code}")
+                if hasattr(e, 'message'):
+                    print(f"Message attr: {e.message}")
+                print(f"========================")
+                
+                # Invalid API key - no point trying other models
                 if "API_KEY_INVALID" in error_message or "API key not valid" in error_message:
                     return Response(
                         {"error": "Invalid or unauthorized API key provided."},
                         status=status.HTTP_401_UNAUTHORIZED,
                     )
+                
+                # Quota exceeded - try next model
+                if "RESOURCE_EXHAUSTED" in error_message or "quota" in error_message.lower():
+                    print(f"{model_name} quota exceeded, trying next model...")
+                    break  # Break retry loop, move to next model
+                
+                # Other client errors - show full details
+                print(f"Returning client error for {model_name}")
                 return Response(
-                    {"error": f"Client error: {error_message}"},
+                    {"error": f"Client error with {model_name}: {error_message}"},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
@@ -174,13 +227,17 @@ def ask_gemini(request, max_retries=2, delay=2):
                 )
 
             except Exception as e:
+                print(f"=== Unexpected Error ===")
+                print(f"Error type: {type(e)}")
+                print(f"Error: {e}")
+                print(f"========================")
                 return Response(
                     {"error": f"Unexpected error: {str(e)}"},
                     status=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 )
 
     return Response(
-        {"error": "All Gemini models are currently unavailable."},
+        {"error": "All Gemini models are currently unavailable or quota exceeded."},
         status=status.HTTP_503_SERVICE_UNAVAILABLE,
     )
 

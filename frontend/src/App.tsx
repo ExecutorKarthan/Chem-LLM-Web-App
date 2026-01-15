@@ -8,20 +8,20 @@ import { BACKEND_URL } from "./config.js";
 // Check if cookie token exists on the server
 const checkTokenServerSide = async (): Promise<boolean> => {
   try {
-    // Query the Django server looking for a secure cookie to exist
-    const res = await axios.get(
-      `${BACKEND_URL}` + "/api/check-cookie/",
-      { withCredentials: true }
-    );
-    console.log(`${BACKEND_URL}`+ "/api/check-cookie/")
-    // Return true if the cookie exists
+    const url = `${BACKEND_URL}/api/check-cookie/`;
+    console.log('🔍 Checking token at:', url);
+    console.log('🔍 Full URL will be:', new URL(url, window.location.href).href);
+    
+    const res = await axios.get(url, { withCredentials: true });
+    
+    console.log('✅ Token check response:', res.data);
+    
     if (res.data.token_exists === true) {
       return true;
     }
-    // Return false if the cookie does not exist
     return false;
   } catch (err) {
-    console.error("Failed to check token:", err);
+    console.error("❌ Failed to check token:", err);
     return false;
   }
 };

@@ -15,35 +15,40 @@ const SplashGate: React.FC = () => {
   const [showApiKey, setShowApiKey] = useState(false);
 
   // Generate behavior for the submission button
-  const handleSubmit = async () => {
-    // Test if has agreed to terms of service and has an API key
-    if (!agreed) {
-      setError("You must agree to the terms.");
-      return;
+const handleSubmit = async () => {
+  if (!agreed) {
+    setError("You must agree to the terms.");
+    return;
+  }
+  if (!apiKey.trim()) {
+    setError("API key is required.");
+    return;
+  }
+  
+  try {
+    const url = `${BACKEND_URL}/api/tokenize-key/`;
+    console.log('🔑 Tokenizing key at:', url);
+    console.log('🔑 Full URL will be:', new URL(url, window.location.href).href);
+    
+    const response = await axios.post(
+      url,
+      { apiKey: apiKey.trim() },
+      { withCredentials: true }
+    );
+    
+    console.log('✅ Tokenize response:', response.status);
+    
+    if (response.status === 200) {
+      localStorage.setItem("gemini_token", "agreed"); 
+      window.location.reload();
+    } else {
+      setError("Failed to authenticate API key.");
     }
-    if (!apiKey.trim()) {
-      setError("API key is required.");
-      return;
-    }
-    // If there is an API key and Terms are agreed, tokenize the key and set terms to true
-    try {
-      const response = await axios.post(
-        `${BACKEND_URL}` + "/api/tokenize-key/",
-        { apiKey: apiKey.trim() },
-        { withCredentials: true }
-      );
-      if (response.status === 200) {
-        localStorage.setItem("gemini_token", "agreed"); 
-        // Reload the page to send the user to the main page
-        window.location.reload();
-      } else {
-        setError("Failed to authenticate API key.");
-      }
-    } catch (err) {
-      console.error(err);
-      setError("Failed to connect to the server.");
-    }
-  };
+  } catch (err) {
+    console.error("❌ Tokenize error:", err);
+    setError("Failed to connect to the server.");
+  }
+};
 
   // Return the HTML for the browser to show
   return (

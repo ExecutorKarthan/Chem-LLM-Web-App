@@ -1,6 +1,26 @@
-// src/config.ts
+  // src/config.ts
 const isDevelopment = import.meta.env.DEV;
 
-export const BACKEND_URL = isDevelopment 
-  ? (import.meta.env.VITE_BACKEND_URL_DEV || '')
-  : 'http://llmexplorer.engr.wustl.edu:8000';
+const getBackendUrl = () => {
+  console.log('=== BACKEND URL CONFIGURATION ===');
+  console.log('Environment:', isDevelopment ? 'DEVELOPMENT' : 'PRODUCTION');
+  console.log('import.meta.env.DEV:', import.meta.env.DEV);
+  console.log('import.meta.env.MODE:', import.meta.env.MODE);
+  console.log('window.location.hostname:', window.location.hostname);
+  console.log('window.location.href:', window.location.href);
+  
+  let backendUrl: string;
+  
+  if (isDevelopment) {
+    backendUrl = 'http://localhost:8000';
+    console.log('Using DEVELOPMENT backend:', backendUrl);
+  } else {
+    backendUrl = '';  // Relative URLs in production
+    console.log('Using PRODUCTION backend: (empty string = relative URLs)');
+  }
+  
+  console.log('=================================');
+  return backendUrl;
+};
+
+export const BACKEND_URL = getBackendUrl();
