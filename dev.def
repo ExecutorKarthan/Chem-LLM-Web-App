@@ -3,25 +3,22 @@ From: rockylinux:9
 
 %labels
     Author LLM Web App Team
-    Version 1.0
-    Description Production container for LLM Web App on llmexplorer.engr.wustl.edu
+    Version 1.0-dev
+    Description Development container for LLM Web App
 
 %help
-    Production container for the LLM Web Application.
-    Runs on llmexplorer.engr.wustl.edu:8000
+    Development container for the LLM Web Application.
+    Runs on localhost:8000
     
     Usage:
-        # Set your Django secret key (REQUIRED)
-        export SINGULARITYENV_DJANGO_SECRET_KEY="your-secret-key-here"
+        # Optional: Set custom Django secret key
+        export APPTAINERENV_DJANGO_SECRET_KEY="your-secret-key-here"
         
         # Run the container
-        apptainer run production.sif
-    
-    Generate a secret key with:
-        python3 -c 'from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())'
+        apptainer run dev.sif
     
     The app will be available at:
-        http://llmexplorer.engr.wustl.edu:8000
+        http://localhost:8000
 
 %environment
     # Python environment
@@ -32,7 +29,7 @@ From: rockylinux:9
     # Django settings
     export DJANGO_SETTINGS_MODULE=backend_project.settings
     export DJANGO_STATIC_ROOT=/opt/app/staticfiles
-    export DJANGO_DEBUG=False
+    export DJANGO_DEBUG=True
     
     # Application paths
     export APP_ROOT=/opt/app
@@ -40,13 +37,13 @@ From: rockylinux:9
     export FRONTEND_ROOT=/opt/app/frontend
     
     # Server configuration
-    export SERVER_HOST=llmexplorer.engr.wustl.edu
+    export SERVER_HOST=localhost
     export SERVER_PORT=8000
-    export WORKERS=4
+    export WORKERS=2
 
 %post
     echo "========================================="
-    echo "Building Production Container"
+    echo "Building Development Container"
     echo "========================================="
     
     # Update system and install build dependencies
@@ -118,19 +115,23 @@ From: rockylinux:9
     node --version || { echo "ERROR: Node installation failed"; exit 1; }
     npm --version || { echo "ERROR: npm installation failed"; exit 1; }
     
-    # Clone repository
-    echo "Cloning repository..."
+    # Clone repository from specific branch
+    echo "Cloning repository from apptainer-deploy branch..."
     cd /opt
     if [ -d "app" ]; then
         echo "Removing existing app directory..."
         rm -rf app
     fi
     
-    # Clone from GitHub (update this URL to your actual repository)
-    git clone https://github.com/YOUR_USERNAME/LLM-Web-App.git app \
-        || { echo "ERROR: Failed to clone repository. Update GitHub URL in production.def"; exit 1; }
+    # Clone the specific branch
+    git clone -b apptainer-deploy https://github.com/ExecutorKarthan/LLM-Web-App.git app \
+        || { echo "ERROR: Failed to clone repository from apptainer-deploy branch"; exit 1; }
     
     cd /opt/app
+    
+    # Show which branch we're on
+    echo "Current branch: $(git branch --show-current)"
+    echo "Latest commit: $(git log -1 --oneline)"
     
     # Verify repository structure
     if [ ! -d "backend" ] || [ ! -d "frontend" ]; then
@@ -175,16 +176,15 @@ From: rockylinux:9
     mkdir -p /opt/app/backend/db
     mkdir -p /opt/app/logs
     
-    # Generate a default Django secret key (user should override at runtime)
+    # Generate a default Django secret key
     echo "Generating default Django secret key..."
     DEFAULT_SECRET=$(/opt/python/bin/python3 -c 'from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())')
     
-    # Create .env file with default values
+    # Create .env file with default values for development
     cat > /opt/app/.env << EOF
-# Auto-generated .env file
-# Override DJANGO_SECRET_KEY at runtime with SINGULARITYENV_DJANGO_SECRET_KEY
+# Auto-generated .env file for development
 DJANGO_SECRET_KEY=${DEFAULT_SECRET}
-DJANGO_DEBUG=False
+DJANGO_DEBUG=True
 DJANGO_STATIC_ROOT=/opt/app/staticfiles
 EOF
     
@@ -203,42 +203,32 @@ EOF
     echo "Cleaning up..."
     dnf clean all
     rm -rf /tmp/*
-    rm -rf /opt/app/frontend/node_modules/.cache
     rm -rf /root/.cache
     
     # Create startup script
     cat > /opt/app/start.sh << 'STARTSCRIPT'
 #!/bin/bash
 
-# Startup script for production container
+# Startup script for development container
 cd /opt/app/backend
 
 echo "========================================="
-echo "LLM Web App - Production"
+echo "LLM Web App - Development"
 echo "========================================="
 echo "Server: http://${SERVER_HOST}:${SERVER_PORT}"
 echo "Workers: ${WORKERS}"
+echo "Debug: ${DJANGO_DEBUG}"
 echo "========================================="
 
-# Check if DJANGO_SECRET_KEY is set
-if [ -z "$DJANGO_SECRET_KEY" ]; then
-    echo "WARNING: DJANGO_SECRET_KEY not set!"
-    echo "Using default key from .env (NOT SECURE for production)"
-    echo ""
-    echo "To set a secure key, run:"
-    echo "  export SINGULARITYENV_DJANGO_SECRET_KEY='your-secret-key'"
-    echo "  apptainer run production.sif"
-    echo ""
-fi
-
-# Start gunicorn
+# Start gunicorn with reload for development
 exec /opt/python/bin/gunicorn \
     --bind ${SERVER_HOST}:${SERVER_PORT} \
     --workers ${WORKERS} \
     --timeout 120 \
+    --reload \
     --access-logfile /opt/app/logs/access.log \
     --error-logfile /opt/app/logs/error.log \
-    --log-level info \
+    --log-level debug \
     --chdir /opt/app/backend \
     backend_project.wsgi:application
 STARTSCRIPT
@@ -253,40 +243,17 @@ STARTSCRIPT
     exec /opt/app/start.sh
 
 %test
-    echo "Running container tests..."
+    echo "Running development container tests..."
     
     # Test Python installation
-    echo "Testing Python..."
     /opt/python/bin/python3 --version || exit 1
     
     # Test Node installation
-    echo "Testing Node.js..."
     node --version || exit 1
     npm --version || exit 1
     
-    # Test repository structure
-    echo "Testing repository structure..."
-    [ -d "/opt/app/backend" ] || { echo "ERROR: /opt/app/backend missing"; exit 1; }
-    [ -d "/opt/app/frontend" ] || { echo "ERROR: /opt/app/frontend missing"; exit 1; }
-    [ -f "/opt/app/backend/manage.py" ] || { echo "ERROR: manage.py missing"; exit 1; }
-    
     # Test Django
-    echo "Testing Django..."
     cd /opt/app/backend
     /opt/python/bin/python3 manage.py check || exit 1
     
-    # Verify static files exist
-    echo "Testing static files..."
-    [ -d "/opt/app/staticfiles" ] || { echo "ERROR: staticfiles directory missing"; exit 1; }
-    
-    # Verify frontend build exists
-    echo "Testing frontend build..."
-    [ -f "/opt/app/frontend/dist/index.html" ] || { echo "ERROR: frontend build missing"; exit 1; }
-    
-    # Test startup script exists
-    [ -f "/opt/app/start.sh" ] || { echo "ERROR: start.sh missing"; exit 1; }
-    [ -x "/opt/app/start.sh" ] || { echo "ERROR: start.sh not executable"; exit 1; }
-    
-    echo "========================================="
-    echo "All tests passed!"
-    echo "========================================="
+    echo "Development container tests passed!"

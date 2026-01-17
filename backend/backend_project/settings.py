@@ -13,7 +13,7 @@ load_dotenv(BASE_DIR / ".env")
 
 SECRET_KEY = os.getenv("DJANGO_SECRET_KEY")
 if not SECRET_KEY:
-    raise RuntimeError("DJANGO_SECRET_KEY not set")
+    raise RuntimeError("DJANGO_SECRET_KEY not set in .env file")
 
 DEBUG = os.getenv("DJANGO_DEBUG", "False") == "True"
 
@@ -63,7 +63,7 @@ CORS_ALLOWED_ORIGINS = [
     'http://localhost:8000',
     'http://127.0.0.1:8000',
     'http://llmexplorer.engr.wustl.edu:8000',
-    'http://localhost:32780',
+    'http://localhost:32780',  # Vite dev server
 ]
 
 CORS_ALLOW_HEADERS = list(default_headers) + ["X-Token"]
@@ -72,8 +72,8 @@ CORS_ALLOW_CREDENTIALS = True
 CSRF_TRUSTED_ORIGINS = [
     'http://localhost:8000',
     'http://127.0.0.1:8000',
-    'http://localhost:32780',  # For local Vite dev server
-    'http://llmexplorer.engr.wustl.edu',
+    'http://localhost:32780',
+    'http://llmexplorer.engr.wustl.edu:8000',
 ]
 
 ############################################
@@ -92,15 +92,15 @@ CACHES = {
 ############################################
 STATIC_URL = "/assets/"
 
-# Use environment variable for static root if set (read-only safe container)
-STATIC_ROOT = Path(os.environ.get("DJANGO_STATIC_ROOT", "/opt/app/LLM-Web-App/staticfiles"))
+# Use local path, not /opt/app (production container sets this via env var)
+STATIC_ROOT = Path(os.environ.get("DJANGO_STATIC_ROOT", BASE_DIR / "staticfiles"))
 
-# Only include asset-specific directories, not the full dist folder
+# Point to React build assets
 STATICFILES_DIRS = [
-    BASE_DIR / "assets" / "static",
+    BASE_DIR / "assets" / "static",  # Puzzle images
 ]
 
-# Add dist/assets only if it exists and is different from STATIC_ROOT
+# Add React dist/assets if it exists
 DIST_ASSETS = BASE_DIR.parent / "frontend" / "dist" / "assets"
 if DIST_ASSETS.exists() and DIST_ASSETS != STATIC_ROOT:
     STATICFILES_DIRS.append(DIST_ASSETS)
@@ -110,14 +110,13 @@ STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
 ############################################
 # Templates (React index.html)
 ############################################
-# FIX: Use dynamic path relative to BASE_DIR instead of hardcoded /opt/app
 REACT_BUILD_DIR = BASE_DIR.parent / "frontend" / "dist"
 
 TEMPLATES = [
     {
         "BACKEND": "django.template.backends.django.DjangoTemplates",
         "DIRS": [
-            REACT_BUILD_DIR,  # Dynamic path
+            REACT_BUILD_DIR,  # Serve React index.html
         ],
         "APP_DIRS": False,
         "OPTIONS": {
@@ -146,7 +145,6 @@ DATABASES = {
     }
 }
 
-
 ############################################
 # Internationalization
 ############################################
@@ -162,9 +160,9 @@ SECURE_BROWSER_XSS_FILTER = True
 SECURE_CONTENT_TYPE_NOSNIFF = True
 X_FRAME_OPTIONS = "DENY"
 
-# Allow HTTP inside container
-CSRF_COOKIE_SECURE = False
-SESSION_COOKIE_SECURE = False
+# Cookie security (HTTP for development, HTTPS for production)
+CSRF_COOKIE_SECURE = not DEBUG
+SESSION_COOKIE_SECURE = not DEBUG
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_AGE = 5400
 SESSION_EXPIRE_AT_BROWSER_CLOSE = False
@@ -180,12 +178,12 @@ LOGGING = {
     },
     "root": {
         "handlers": ["console"],
-        "level": "INFO",
+        "level": "DEBUG" if DEBUG else "INFO",
     },
     "loggers": {
         "django": {
             "handlers": ["console"],
-            "level": "INFO",
+            "level": "DEBUG" if DEBUG else "INFO",
             "propagate": False,
         },
     },
