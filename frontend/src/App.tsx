@@ -35,10 +35,19 @@ function App(): JSX.Element {
   // Use a hook to check for previous agreement and cookies
   useEffect(() => {
     const checkCookie = async () => {
+      // First, get CSRF token
+      try {
+        await axios.get(`${BACKEND_URL}/api/csrf/`, { withCredentials: true });
+        console.log('✅ CSRF token obtained');
+      } catch (err) {
+        console.error('⚠️ Failed to get CSRF token:', err);
+      }
+      
+      // Then check for auth cookie
       const present = await checkTokenServerSide();
       setCookiePresent(present);
-      console.log(cookiePresent)
-      console.log(BACKEND_URL)
+      console.log('Cookie present:', present);
+      console.log('Backend URL:', BACKEND_URL);
     };
     checkCookie();
 

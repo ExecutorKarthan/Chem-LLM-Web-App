@@ -4,21 +4,21 @@ From: rockylinux:9
 %labels
     Author LLM Web App Team
     Version 1.0-dev
-    Description Development container for LLM Web App
+    Description Development container for LLM Web App (local testing)
 
 %help
     Development container for the LLM Web Application.
-    Runs on localhost:8000
+    For local testing before deploying to production.
     
     Usage:
-        # Optional: Set custom Django secret key
-        export APPTAINERENV_DJANGO_SECRET_KEY="your-secret-key-here"
-        
-        # Run the container
-        apptainer run dev.sif
+        # Simply run the container
+        apptainer run development.sif
     
     The app will be available at:
         http://localhost:8000
+    
+    Logs are written to /tmp/llm-app-logs/ inside the container.
+    Note: Django secret key is auto-generated during build.
 
 %environment
     # Python environment
@@ -29,17 +29,17 @@ From: rockylinux:9
     # Django settings
     export DJANGO_SETTINGS_MODULE=backend_project.settings
     export DJANGO_STATIC_ROOT=/opt/app/staticfiles
-    export DJANGO_DEBUG=True
+    export DJANGO_DEBUG=False
     
     # Application paths
     export APP_ROOT=/opt/app
     export BACKEND_ROOT=/opt/app/backend
     export FRONTEND_ROOT=/opt/app/frontend
     
-    # Server configuration
-    export SERVER_HOST=localhost
+    # Server configuration - LOCAL DEVELOPMENT
+    export SERVER_HOST=0.0.0.0
     export SERVER_PORT=8000
-    export WORKERS=2
+    export WORKERS=4
 
 %post
     echo "========================================="
@@ -49,28 +49,16 @@ From: rockylinux:9
     # Update system and install build dependencies
     echo "Installing system dependencies..."
     dnf update -y
-    dnf install -y \
-        gcc \
-        gcc-c++ \
-        make \
-        git \
-        wget \
-        curl \
-        bzip2 \
-        tar \
-        gzip \
-        libffi-devel \
-        openssl-devel \
-        sqlite-devel \
-        zlib-devel \
-        bzip2-devel \
-        readline-devel \
-        xz-devel \
-        ncurses-devel \
-        gdbm-devel \
-        db4-devel \
-        libpcap-devel \
-        expat-devel \
+
+    # Enable CRB repository (required for gdbm-devel, libpcap-devel, etc.)
+    dnf install -y dnf-plugins-core
+    dnf config-manager --set-enabled crb
+
+    # Now install the dependencies
+    dnf install -y --allowerasing gcc gcc-c++ make git wget bzip2 tar gzip \
+        libffi-devel openssl-devel sqlite-devel zlib-devel \
+        bzip2-devel readline-devel xz-devel ncurses-devel \
+        gdbm-devel libpcap-devel expat-devel libdb-devel \
         || { echo "ERROR: Failed to install system dependencies"; exit 1; }
     
     # Install Python 3.11
@@ -115,23 +103,19 @@ From: rockylinux:9
     node --version || { echo "ERROR: Node installation failed"; exit 1; }
     npm --version || { echo "ERROR: npm installation failed"; exit 1; }
     
-    # Clone repository from specific branch
-    echo "Cloning repository from apptainer-deploy branch..."
+    # Clone repository
+    echo "Cloning repository..."
     cd /opt
     if [ -d "app" ]; then
         echo "Removing existing app directory..."
         rm -rf app
     fi
     
-    # Clone the specific branch
-    git clone -b apptainer-deploy https://github.com/ExecutorKarthan/LLM-Web-App.git app \
-        || { echo "ERROR: Failed to clone repository from apptainer-deploy branch"; exit 1; }
+    # Clone from GitHub (update this URL to your actual repository)
+    git clone https://github.com/ExecutorKarthan/LLM-Web-App.git app \
+        || { echo "ERROR: Failed to clone repository. Update GitHub URL in development.def"; exit 1; }
     
     cd /opt/app
-    
-    # Show which branch we're on
-    echo "Current branch: $(git branch --show-current)"
-    echo "Latest commit: $(git log -1 --oneline)"
     
     # Verify repository structure
     if [ ! -d "backend" ] || [ ! -d "frontend" ]; then
@@ -161,6 +145,10 @@ From: rockylinux:9
     
     # Build frontend
     echo "Building frontend..."
+    
+    # Set environment variable for Vite build (empty for relative URLs in development)
+    export VITE_BACKEND_URL=""
+    
     npm run build \
         || { echo "ERROR: Frontend build failed"; exit 1; }
     
@@ -175,60 +163,189 @@ From: rockylinux:9
     mkdir -p /opt/app/staticfiles
     mkdir -p /opt/app/backend/db
     mkdir -p /opt/app/logs
+    chmod 777 /opt/app/logs
     
-    # Generate a default Django secret key
-    echo "Generating default Django secret key..."
-    DEFAULT_SECRET=$(/opt/python/bin/python3 -c 'from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())')
+    # Generate Django secret key and save it securely
+    echo "Generating Django secret key..."
+    /opt/python/bin/python3 -c 'from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())' > /opt/app/.secret_key
+    chmod 600 /opt/app/.secret_key
     
-    # Create .env file with default values for development
-    cat > /opt/app/.env << EOF
-# Auto-generated .env file for development
-DJANGO_SECRET_KEY=${DEFAULT_SECRET}
-DJANGO_DEBUG=True
-DJANGO_STATIC_ROOT=/opt/app/staticfiles
+    # Create missing views.py for frontend serving
+    echo "Creating backend_project/views.py..."
+    cat > /opt/app/backend/backend_project/views.py << 'VIEWSPY'
+from django.shortcuts import render
+from django.http import HttpResponse
+from pathlib import Path
+
+def frontend(request):
+    """Serve the React frontend index.html"""
+    try:
+        return render(request, "index.html")
+    except Exception as e:
+        return HttpResponse(f"Error loading frontend: {e}", status=500)
+VIEWSPY
+
+    # Patch urls.py to add frontend routes
+    echo "Patching urls.py to add frontend routes..."
+    cat > /tmp/patch_urls.py << 'EOF'
+# Read the urls.py file
+with open('/opt/app/backend/backend_project/urls.py', 'r') as f:
+    content = f.read()
+
+# Check if frontend routes already exist
+if 'from backend_project.views import frontend' not in content:
+    # Replace the entire urlpatterns
+    new_content = '''# Import needed modules
+from django.contrib import admin
+from django.urls import path, include, re_path
+from backend_project.views import frontend
+
+# Define URL patterns for app navigation
+urlpatterns = [
+    path('admin/', admin.site.urls),
+    path('api/', include('api.urls')),
+    
+    # Root route -> React
+    path("", frontend, name="frontend_root"),
+    
+    # SPA fallback: anything not /api or /admin
+    re_path(r"^(?!api/|admin/).*$", frontend, name="frontend_catchall"),
+]
+'''
+    
+    with open('/opt/app/backend/backend_project/urls.py', 'w') as f:
+        f.write(new_content)
+    
+    print("urls.py patched successfully")
+else:
+    print("urls.py already has frontend routes")
 EOF
+    
+    /opt/python/bin/python3 /tmp/patch_urls.py
+    
+    # Fix TEMPLATES configuration in settings.py to enable template loading
+    echo "Patching settings.py to fix template loading..."
+    cd /opt/app/backend/backend_project
+    
+    # Create a patch script
+    cat > /tmp/patch_settings.py << 'EOF'
+import re
+
+# Read the settings file
+with open('/opt/app/backend/backend_project/settings.py', 'r') as f:
+    content = f.read()
+
+# Add REACT_BUILD_DIR after BASE_DIR
+if 'REACT_BUILD_DIR' not in content:
+    # Find the line with BASE_DIR and add REACT_BUILD_DIR after it
+    lines = content.split('\n')
+    new_lines = []
+    for i, line in enumerate(lines):
+        new_lines.append(line)
+        if 'BASE_DIR = Path(__file__).resolve().parent.parent' in line:
+            new_lines.append('')
+            new_lines.append('# React frontend build directory')
+            new_lines.append('REACT_BUILD_DIR = BASE_DIR.parent / "frontend" / "dist"')
+    content = '\n'.join(new_lines)
+
+# Change APP_DIRS to True
+content = content.replace("'APP_DIRS': False,", "'APP_DIRS': True,")
+
+# Replace empty DIRS with REACT_BUILD_DIR in TEMPLATES
+content = content.replace("'DIRS': [],", "'DIRS': [REACT_BUILD_DIR],")
+
+# Fix STATIC_URL to match React build output
+content = content.replace("STATIC_URL = '/static/'", "STATIC_URL = '/assets/'")
+
+# Fix STATICFILES_DIRS to include React build assets
+old_staticfiles = "STATICFILES_DIRS = [\n    BASE_DIR / 'assets' / 'static',\n]"
+new_staticfiles = """STATICFILES_DIRS = [
+    BASE_DIR / 'assets' / 'static',
+    BASE_DIR.parent / 'frontend' / 'dist' / 'assets',
+]"""
+content = content.replace(old_staticfiles, new_staticfiles)
+
+# Fix CSRF_TRUSTED_ORIGINS for localhost
+content = content.replace(
+    'CSRF_TRUSTED_ORIGINS = [\n    "https://llm-web-app-4970.onrender.com/",  \n]',
+    '''CSRF_TRUSTED_ORIGINS = [
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+    "https://llm-web-app-4970.onrender.com/",  
+]'''
+)
+
+# Write back
+with open('/opt/app/backend/backend_project/settings.py', 'w') as f:
+    f.write(content)
+
+print("Settings.py patched successfully")
+EOF
+    
+    # Execute the patch script
+    /opt/python/bin/python3 /tmp/patch_settings.py
+    
+    # Verify the patch
+    echo "Verifying patch..."
+    grep -q "REACT_BUILD_DIR" /opt/app/backend/backend_project/settings.py && echo "✓ REACT_BUILD_DIR added" || echo "✗ REACT_BUILD_DIR not found"
+    grep -q "'DIRS': \[REACT_BUILD_DIR\]" /opt/app/backend/backend_project/settings.py && echo "✓ DIRS updated" || echo "✗ DIRS not updated"
+    grep -q "STATIC_URL = '/assets/'" /opt/app/backend/backend_project/settings.py && echo "✓ STATIC_URL updated to /assets/" || echo "✗ STATIC_URL not updated"
+    grep -q "http://localhost:8000" /opt/app/backend/backend_project/settings.py && echo "✓ CSRF_TRUSTED_ORIGINS updated" || echo "✗ CSRF not updated"
     
     # Collect static files
     echo "Collecting static files..."
     cd /opt/app/backend
-    /opt/python/bin/python3 manage.py collectstatic --noinput \
+    DJANGO_SECRET_KEY=$(cat /opt/app/.secret_key) /opt/python/bin/python3 manage.py collectstatic --noinput \
         || { echo "WARNING: collectstatic failed, but continuing..."; }
     
     # Create/migrate database
     echo "Setting up database..."
-    /opt/python/bin/python3 manage.py migrate --noinput \
+    DJANGO_SECRET_KEY=$(cat /opt/app/.secret_key) /opt/python/bin/python3 manage.py migrate --noinput \
         || { echo "WARNING: migrate failed, but continuing..."; }
     
     # Clean up build artifacts
     echo "Cleaning up..."
     dnf clean all
-    rm -rf /tmp/*
-    rm -rf /root/.cache
     
     # Create startup script
     cat > /opt/app/start.sh << 'STARTSCRIPT'
 #!/bin/bash
 
+# Load the auto-generated secret key
+export DJANGO_SECRET_KEY=$(cat /opt/app/.secret_key)
+
 # Startup script for development container
 cd /opt/app/backend
+
+# Create logs directory in /tmp (writable in container)
+# /tmp is always writable in Apptainer containers
+mkdir -p /tmp/llm-app-logs || {
+    echo "ERROR: Failed to create logs directory"
+    echo "Falling back to stdout/stderr logging"
+    LOG_ACCESS="-"
+    LOG_ERROR="-"
+}
+
+# Set log paths (fallback to stdout/stderr if mkdir failed)
+LOG_ACCESS=${LOG_ACCESS:-/tmp/llm-app-logs/access.log}
+LOG_ERROR=${LOG_ERROR:-/tmp/llm-app-logs/error.log}
 
 echo "========================================="
 echo "LLM Web App - Development"
 echo "========================================="
-echo "Server: http://${SERVER_HOST}:${SERVER_PORT}"
+echo "Server: http://localhost:${SERVER_PORT}"
 echo "Workers: ${WORKERS}"
-echo "Debug: ${DJANGO_DEBUG}"
+echo "Logs: ${LOG_ACCESS}"
 echo "========================================="
 
-# Start gunicorn with reload for development
+# Start gunicorn
 exec /opt/python/bin/gunicorn \
     --bind ${SERVER_HOST}:${SERVER_PORT} \
     --workers ${WORKERS} \
     --timeout 120 \
-    --reload \
-    --access-logfile /opt/app/logs/access.log \
-    --error-logfile /opt/app/logs/error.log \
-    --log-level debug \
+    --access-logfile ${LOG_ACCESS} \
+    --error-logfile ${LOG_ERROR} \
+    --log-level info \
     --chdir /opt/app/backend \
     backend_project.wsgi:application
 STARTSCRIPT
@@ -243,17 +360,44 @@ STARTSCRIPT
     exec /opt/app/start.sh
 
 %test
-    echo "Running development container tests..."
+    echo "Running container tests..."
     
     # Test Python installation
+    echo "Testing Python..."
     /opt/python/bin/python3 --version || exit 1
     
     # Test Node installation
+    echo "Testing Node.js..."
     node --version || exit 1
     npm --version || exit 1
     
-    # Test Django
-    cd /opt/app/backend
-    /opt/python/bin/python3 manage.py check || exit 1
+    # Test repository structure
+    echo "Testing repository structure..."
+    [ -d "/opt/app/backend" ] || { echo "ERROR: /opt/app/backend missing"; exit 1; }
+    [ -d "/opt/app/frontend" ] || { echo "ERROR: /opt/app/frontend missing"; exit 1; }
+    [ -f "/opt/app/backend/manage.py" ] || { echo "ERROR: manage.py missing"; exit 1; }
     
-    echo "Development container tests passed!"
+    # Test secret key file exists
+    echo "Testing secret key..."
+    [ -f "/opt/app/.secret_key" ] || { echo "ERROR: .secret_key missing"; exit 1; }
+    
+    # Test Django
+    echo "Testing Django..."
+    cd /opt/app/backend
+    DJANGO_SECRET_KEY=$(cat /opt/app/.secret_key) /opt/python/bin/python3 manage.py check || exit 1
+    
+    # Verify static files exist
+    echo "Testing static files..."
+    [ -d "/opt/app/staticfiles" ] || { echo "ERROR: staticfiles directory missing"; exit 1; }
+    
+    # Verify frontend build exists
+    echo "Testing frontend build..."
+    [ -f "/opt/app/frontend/dist/index.html" ] || { echo "ERROR: frontend build missing"; exit 1; }
+    
+    # Test startup script exists
+    [ -f "/opt/app/start.sh" ] || { echo "ERROR: start.sh missing"; exit 1; }
+    [ -x "/opt/app/start.sh" ] || { echo "ERROR: start.sh not executable"; exit 1; }
+    
+    echo "========================================="
+    echo "All tests passed!"
+    echo "========================================="

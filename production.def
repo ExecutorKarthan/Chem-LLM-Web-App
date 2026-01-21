@@ -11,17 +11,14 @@ From: rockylinux:9
     Runs on llmexplorer.engr.wustl.edu:8000
     
     Usage:
-        # Set your Django secret key (REQUIRED)
-        export SINGULARITYENV_DJANGO_SECRET_KEY="your-secret-key-here"
-        
-        # Run the container
+        # Simply run the container
         apptainer run production.sif
-    
-    Generate a secret key with:
-        python3 -c 'from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())'
     
     The app will be available at:
         http://llmexplorer.engr.wustl.edu:8000
+    
+    Logs are written to /tmp/llm-app-logs/ inside the container.
+    Note: Django secret key is auto-generated during build.
 
 %environment
     # Python environment
@@ -52,28 +49,16 @@ From: rockylinux:9
     # Update system and install build dependencies
     echo "Installing system dependencies..."
     dnf update -y
-    dnf install -y \
-        gcc \
-        gcc-c++ \
-        make \
-        git \
-        wget \
-        curl \
-        bzip2 \
-        tar \
-        gzip \
-        libffi-devel \
-        openssl-devel \
-        sqlite-devel \
-        zlib-devel \
-        bzip2-devel \
-        readline-devel \
-        xz-devel \
-        ncurses-devel \
-        gdbm-devel \
-        db4-devel \
-        libpcap-devel \
-        expat-devel \
+
+    # Enable CRB repository (required for gdbm-devel, libpcap-devel, etc.)
+    dnf install -y dnf-plugins-core
+    dnf config-manager --set-enabled crb
+
+    # Now install the dependencies
+    dnf install -y --allowerasing gcc gcc-c++ make git wget bzip2 tar gzip \
+        libffi-devel openssl-devel sqlite-devel zlib-devel \
+        bzip2-devel readline-devel xz-devel ncurses-devel \
+        gdbm-devel libpcap-devel expat-devel libdb-devel \
         || { echo "ERROR: Failed to install system dependencies"; exit 1; }
     
     # Install Python 3.11
@@ -127,7 +112,7 @@ From: rockylinux:9
     fi
     
     # Clone from GitHub (update this URL to your actual repository)
-    git clone https://github.com/YOUR_USERNAME/LLM-Web-App.git app \
+    git clone https://github.com/ExecutorKarthan/LLM-Web-App.git app \
         || { echo "ERROR: Failed to clone repository. Update GitHub URL in production.def"; exit 1; }
     
     cd /opt/app
@@ -160,6 +145,10 @@ From: rockylinux:9
     
     # Build frontend
     echo "Building frontend..."
+    
+    # Set environment variable for Vite build (production URL)
+    export VITE_BACKEND_URL="http://llmexplorer.engr.wustl.edu:8000"
+    
     npm run build \
         || { echo "ERROR: Frontend build failed"; exit 1; }
     
@@ -174,70 +163,187 @@ From: rockylinux:9
     mkdir -p /opt/app/staticfiles
     mkdir -p /opt/app/backend/db
     mkdir -p /opt/app/logs
+    chmod 777 /opt/app/logs
     
-    # Generate a default Django secret key (user should override at runtime)
-    echo "Generating default Django secret key..."
-    DEFAULT_SECRET=$(/opt/python/bin/python3 -c 'from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())')
+    # Generate Django secret key and save it securely
+    echo "Generating Django secret key..."
+    /opt/python/bin/python3 -c 'from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())' > /opt/app/.secret_key
+    chmod 600 /opt/app/.secret_key
     
-    # Create .env file with default values
-    cat > /opt/app/.env << EOF
-# Auto-generated .env file
-# Override DJANGO_SECRET_KEY at runtime with SINGULARITYENV_DJANGO_SECRET_KEY
-DJANGO_SECRET_KEY=${DEFAULT_SECRET}
-DJANGO_DEBUG=False
-DJANGO_STATIC_ROOT=/opt/app/staticfiles
+    # Create missing views.py for frontend serving
+    echo "Creating backend_project/views.py..."
+    cat > /opt/app/backend/backend_project/views.py << 'VIEWSPY'
+from django.shortcuts import render
+from django.http import HttpResponse
+from pathlib import Path
+
+def frontend(request):
+    """Serve the React frontend index.html"""
+    try:
+        return render(request, "index.html")
+    except Exception as e:
+        return HttpResponse(f"Error loading frontend: {e}", status=500)
+VIEWSPY
+
+    # Patch urls.py to add frontend routes
+    echo "Patching urls.py to add frontend routes..."
+    cat > /tmp/patch_urls.py << 'EOF'
+# Read the urls.py file
+with open('/opt/app/backend/backend_project/urls.py', 'r') as f:
+    content = f.read()
+
+# Check if frontend routes already exist
+if 'from backend_project.views import frontend' not in content:
+    # Replace the entire urlpatterns
+    new_content = '''# Import needed modules
+from django.contrib import admin
+from django.urls import path, include, re_path
+from backend_project.views import frontend
+
+# Define URL patterns for app navigation
+urlpatterns = [
+    path('admin/', admin.site.urls),
+    path('api/', include('api.urls')),
+    
+    # Root route -> React
+    path("", frontend, name="frontend_root"),
+    
+    # SPA fallback: anything not /api or /admin
+    re_path(r"^(?!api/|admin/).*$", frontend, name="frontend_catchall"),
+]
+'''
+    
+    with open('/opt/app/backend/backend_project/urls.py', 'w') as f:
+        f.write(new_content)
+    
+    print("urls.py patched successfully")
+else:
+    print("urls.py already has frontend routes")
 EOF
+    
+    /opt/python/bin/python3 /tmp/patch_urls.py
+    
+    # Fix TEMPLATES configuration in settings.py to enable template loading
+    echo "Patching settings.py to fix template loading..."
+    cd /opt/app/backend/backend_project
+    
+    # Create a patch script
+    cat > /tmp/patch_settings.py << 'EOF'
+import re
+
+# Read the settings file
+with open('/opt/app/backend/backend_project/settings.py', 'r') as f:
+    content = f.read()
+
+# Add REACT_BUILD_DIR after BASE_DIR
+if 'REACT_BUILD_DIR' not in content:
+    # Find the line with BASE_DIR and add REACT_BUILD_DIR after it
+    lines = content.split('\n')
+    new_lines = []
+    for i, line in enumerate(lines):
+        new_lines.append(line)
+        if 'BASE_DIR = Path(__file__).resolve().parent.parent' in line:
+            new_lines.append('')
+            new_lines.append('# React frontend build directory')
+            new_lines.append('REACT_BUILD_DIR = BASE_DIR.parent / "frontend" / "dist"')
+    content = '\n'.join(new_lines)
+
+# Change APP_DIRS to True
+content = content.replace("'APP_DIRS': False,", "'APP_DIRS': True,")
+
+# Replace empty DIRS with REACT_BUILD_DIR in TEMPLATES
+content = content.replace("'DIRS': [],", "'DIRS': [REACT_BUILD_DIR],")
+
+# Fix STATIC_URL to match React build output
+content = content.replace("STATIC_URL = '/static/'", "STATIC_URL = '/assets/'")
+
+# Fix STATICFILES_DIRS to include React build assets
+old_staticfiles = "STATICFILES_DIRS = [\n    BASE_DIR / 'assets' / 'static',\n]"
+new_staticfiles = """STATICFILES_DIRS = [
+    BASE_DIR / 'assets' / 'static',
+    BASE_DIR.parent / 'frontend' / 'dist' / 'assets',
+]"""
+content = content.replace(old_staticfiles, new_staticfiles)
+
+# Fix CSRF_TRUSTED_ORIGINS for production
+content = content.replace(
+    'CSRF_TRUSTED_ORIGINS = [\n    "https://llm-web-app-4970.onrender.com/",  \n]',
+    '''CSRF_TRUSTED_ORIGINS = [
+    "http://llmexplorer.engr.wustl.edu:8000",
+    "https://llm-web-app-4970.onrender.com/",  
+]'''
+)
+
+# Write back
+with open('/opt/app/backend/backend_project/settings.py', 'w') as f:
+    f.write(content)
+
+print("Settings.py patched successfully")
+EOF
+    
+    # Execute the patch script
+    /opt/python/bin/python3 /tmp/patch_settings.py
+    
+    # Verify the patch
+    echo "Verifying patch..."
+    grep -q "REACT_BUILD_DIR" /opt/app/backend/backend_project/settings.py && echo "✓ REACT_BUILD_DIR added" || echo "✗ REACT_BUILD_DIR not found"
+    grep -q "'DIRS': \[REACT_BUILD_DIR\]" /opt/app/backend/backend_project/settings.py && echo "✓ DIRS updated" || echo "✗ DIRS not updated"
+    grep -q "STATIC_URL = '/assets/'" /opt/app/backend/backend_project/settings.py && echo "✓ STATIC_URL updated to /assets/" || echo "✗ STATIC_URL not updated"
+    grep -q "http://llmexplorer.engr.wustl.edu:8000" /opt/app/backend/backend_project/settings.py && echo "✓ CSRF_TRUSTED_ORIGINS updated" || echo "✗ CSRF not updated"
     
     # Collect static files
     echo "Collecting static files..."
     cd /opt/app/backend
-    /opt/python/bin/python3 manage.py collectstatic --noinput \
+    DJANGO_SECRET_KEY=$(cat /opt/app/.secret_key) /opt/python/bin/python3 manage.py collectstatic --noinput \
         || { echo "WARNING: collectstatic failed, but continuing..."; }
     
     # Create/migrate database
     echo "Setting up database..."
-    /opt/python/bin/python3 manage.py migrate --noinput \
+    DJANGO_SECRET_KEY=$(cat /opt/app/.secret_key) /opt/python/bin/python3 manage.py migrate --noinput \
         || { echo "WARNING: migrate failed, but continuing..."; }
     
     # Clean up build artifacts
     echo "Cleaning up..."
     dnf clean all
-    rm -rf /tmp/*
-    rm -rf /opt/app/frontend/node_modules/.cache
-    rm -rf /root/.cache
     
     # Create startup script
     cat > /opt/app/start.sh << 'STARTSCRIPT'
 #!/bin/bash
 
+# Load the auto-generated secret key
+export DJANGO_SECRET_KEY=$(cat /opt/app/.secret_key)
+
 # Startup script for production container
 cd /opt/app/backend
+
+# Create logs directory in /tmp (writable in container)
+# /tmp is always writable in Apptainer containers
+mkdir -p /tmp/llm-app-logs || {
+    echo "ERROR: Failed to create logs directory"
+    echo "Falling back to stdout/stderr logging"
+    LOG_ACCESS="-"
+    LOG_ERROR="-"
+}
+
+# Set log paths (fallback to stdout/stderr if mkdir failed)
+LOG_ACCESS=${LOG_ACCESS:-/tmp/llm-app-logs/access.log}
+LOG_ERROR=${LOG_ERROR:-/tmp/llm-app-logs/error.log}
 
 echo "========================================="
 echo "LLM Web App - Production"
 echo "========================================="
 echo "Server: http://${SERVER_HOST}:${SERVER_PORT}"
 echo "Workers: ${WORKERS}"
+echo "Logs: ${LOG_ACCESS}"
 echo "========================================="
-
-# Check if DJANGO_SECRET_KEY is set
-if [ -z "$DJANGO_SECRET_KEY" ]; then
-    echo "WARNING: DJANGO_SECRET_KEY not set!"
-    echo "Using default key from .env (NOT SECURE for production)"
-    echo ""
-    echo "To set a secure key, run:"
-    echo "  export SINGULARITYENV_DJANGO_SECRET_KEY='your-secret-key'"
-    echo "  apptainer run production.sif"
-    echo ""
-fi
 
 # Start gunicorn
 exec /opt/python/bin/gunicorn \
     --bind ${SERVER_HOST}:${SERVER_PORT} \
     --workers ${WORKERS} \
     --timeout 120 \
-    --access-logfile /opt/app/logs/access.log \
-    --error-logfile /opt/app/logs/error.log \
+    --access-logfile ${LOG_ACCESS} \
+    --error-logfile ${LOG_ERROR} \
     --log-level info \
     --chdir /opt/app/backend \
     backend_project.wsgi:application
@@ -270,10 +376,14 @@ STARTSCRIPT
     [ -d "/opt/app/frontend" ] || { echo "ERROR: /opt/app/frontend missing"; exit 1; }
     [ -f "/opt/app/backend/manage.py" ] || { echo "ERROR: manage.py missing"; exit 1; }
     
+    # Test secret key file exists
+    echo "Testing secret key..."
+    [ -f "/opt/app/.secret_key" ] || { echo "ERROR: .secret_key missing"; exit 1; }
+    
     # Test Django
     echo "Testing Django..."
     cd /opt/app/backend
-    /opt/python/bin/python3 manage.py check || exit 1
+    DJANGO_SECRET_KEY=$(cat /opt/app/.secret_key) /opt/python/bin/python3 manage.py check || exit 1
     
     # Verify static files exist
     echo "Testing static files..."

@@ -62,19 +62,25 @@ MIDDLEWARE = [
 CORS_ALLOWED_ORIGINS = [
     'http://localhost:8000',
     'http://127.0.0.1:8000',
-    'http://llmexplorer.engr.wustl.edu:8000',
     'http://localhost:32780',  # Vite dev server
+    'https://llmexplorer.engr.wustl.edu',  # HTTPS for production
 ]
 
-CORS_ALLOW_HEADERS = list(default_headers) + ["X-Token"]
+CORS_ALLOW_HEADERS = list(default_headers) + ["X-Token", "X-CSRFToken"]
 CORS_ALLOW_CREDENTIALS = True
 
 CSRF_TRUSTED_ORIGINS = [
     'http://localhost:8000',
     'http://127.0.0.1:8000',
     'http://localhost:32780',
-    'http://llmexplorer.engr.wustl.edu:8000',
+    'https://llmexplorer.engr.wustl.edu',  # HTTPS for production
 ]
+
+# CSRF Cookie Settings
+CSRF_COOKIE_NAME = 'csrftoken'
+CSRF_COOKIE_HTTPONLY = False  # Must be False so JavaScript can read it
+CSRF_COOKIE_SAMESITE = 'Lax'  # Changed from 'None' - 'Lax' works for same-site and is more compatible
+CSRF_COOKIE_SECURE = not DEBUG  # True in production (HTTPS), False in dev (HTTP)
 
 ############################################
 # Cache Configuration (REQUIRED for token storage)
@@ -161,7 +167,6 @@ SECURE_CONTENT_TYPE_NOSNIFF = True
 X_FRAME_OPTIONS = "DENY"
 
 # Cookie security (HTTP for development, HTTPS for production)
-CSRF_COOKIE_SECURE = not DEBUG
 SESSION_COOKIE_SECURE = not DEBUG
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_AGE = 5400

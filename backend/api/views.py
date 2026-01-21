@@ -9,6 +9,7 @@ from django.conf import settings
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.core.cache import cache
+from django.middleware.csrf import get_token
 
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
@@ -17,6 +18,16 @@ from rest_framework import status
 # Google Gemini (NEW SDK)
 from google import genai
 from google.genai.errors import ClientError, ServerError
+
+
+############################################
+# CSRF Token endpoint
+############################################
+def get_csrf_token(request):
+    """Return CSRF token for frontend"""
+    token = get_token(request)
+    response = JsonResponse({'csrfToken': token})
+    return response
 
 
 ############################################
@@ -78,11 +89,23 @@ def tokenize_key(request):
         # Strip whitespace from API key
         api_key = api_key.strip()
         
-        print(f"Storing API key (length: {len(api_key)})")  # Debug
-        print(f"First 10 chars: {api_key[:10]}...")  # Debug (safe to show)
+        print(f"=== TOKENIZE DEBUG ===")
+        print(f"Storing API key (length: {len(api_key)})")
+        print(f"First 10 chars: {api_key[:10]}...")
+        print(f"API key type: {type(api_key)}")
+        print(f"=====================")
 
         token = str(uuid.uuid4())
+        
+        # Store in cache
         cache.set(token, api_key, timeout=5400)
+        
+        # VERIFY IT WAS STORED
+        retrieved = cache.get(token)
+        print(f"=== VERIFICATION ===")
+        print(f"Retrieved after storage: {retrieved is not None}")
+        print(f"Keys match: {retrieved == api_key if retrieved else 'N/A'}")
+        print(f"====================")
 
         response = JsonResponse({"message": "Token set in secure cookie."})
         response.set_cookie(
@@ -97,6 +120,7 @@ def tokenize_key(request):
         return response
 
     except Exception as e:
+        print(f"ERROR in tokenize_key: {e}")
         return JsonResponse(
             {"error": "Server error", "details": str(e)},
             status=500
@@ -126,8 +150,43 @@ def list_models(request):
 
 
 ############################################
+# Test API key (DEBUG)
+############################################
+@api_view(["GET"])
+def test_api_key(request):
+    """Debug endpoint to test if the stored API key works"""
+    token = request.COOKIES.get("gemini_token")
+    if not token:
+        return Response({"error": "No token"}, status=401)
+    
+    api_key = cache.get(token)
+    if not api_key:
+        return Response({"error": "Invalid token"}, status=403)
+    
+    try:
+        # Test with the simplest possible request
+        client = genai.Client(api_key=api_key)
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents="Say hello"
+        )
+        return Response({
+            "success": True,
+            "api_key_works": True,
+            "response": response.text
+        })
+    except Exception as e:
+        return Response({
+            "success": False,
+            "error": str(e),
+            "error_type": type(e).__name__
+        }, status=400)
+
+
+############################################
 # Gemini query endpoint
 ############################################
+@csrf_exempt
 @api_view(["POST"])
 def ask_gemini(request, max_retries=2, delay=2):
     model_names = [
@@ -245,6 +304,7 @@ def ask_gemini(request, max_retries=2, delay=2):
 ############################################
 # Clear token + cookie
 ############################################
+@csrf_exempt
 @api_view(["POST"])
 def clear_token(request):
     token = request.COOKIES.get("gemini_token")

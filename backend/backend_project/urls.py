@@ -14,6 +14,7 @@ urlpatterns = [
     path("api/list-models/", api_views.list_models),  # ← Add this line
     path("api/ask/", api_views.ask_gemini),
     path("api/clear-token/", api_views.clear_token),
+    path('api/csrf/', views.get_csrf_token, name='csrf'),
 
     # Root route -> React
     path("", frontend, name="frontend_root"),

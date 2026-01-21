@@ -16,6 +16,19 @@ interface Puzzle {
   code: string;
 }
 
+// Helper function to get CSRF token from cookies
+function getCookie(name: string): string | undefined {
+  const value = `; ${document.cookie}`;
+  const parts = value.split(`; ${name}=`);
+  if (parts.length === 2) {
+    const part = parts.pop();
+    if (part) {
+      return part.split(';').shift();
+    }
+  }
+  return undefined;
+}
+
 // Define main app
 const MainApp = () => {
   // Define constants for reference
@@ -50,21 +63,31 @@ const MainApp = () => {
     setLoading(true);
     setResponse("");
     setError(""); 
+    
+    // Get CSRF token from cookie
+    const csrfToken = getCookie('csrftoken');
+    console.log('CSRF token:', csrfToken ? 'Found' : 'Not found');
+    
     // Attempt to pass the query and API key to the backend for processing if submitted - wait for a response
-      try {
-        const res = await axios.post(
-          `${BACKEND_URL}` + "/api/ask/",
-          {
-            prompt: userQuery.trim(),
-          },
-          {
-            withCredentials: true 
-          }
-        );
-        setResponse(res.data.response);
+    try {
+      const res = await axios.post(
+        `${BACKEND_URL}` + "/api/ask/",
+        {
+          prompt: userQuery.trim(),
+        },
+        {
+          withCredentials: true,
+          headers: csrfToken ? {
+            'X-CSRFToken': csrfToken
+          } : {}
+        }
+      );
+      setResponse(res.data.response);
     }
     //If an error occurs, provide it to the user
     catch (err: any) {
+      console.error("Full error object:", err);
+      console.error("Error response:", err?.response);
       const backendError = err?.response?.data?.error || "Unexpected error occurred.";
       setError(backendError);        
       setResponse(backendError);     
