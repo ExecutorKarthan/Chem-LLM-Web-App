@@ -74,7 +74,6 @@ def check_cookie(request):
 ############################################
 # Tokenize API key into cache + secure cookie
 ############################################
-@csrf_exempt
 def tokenize_key(request):
     if request.method != "POST":
         return JsonResponse({"error": "Invalid request method"}, status=405)
@@ -186,7 +185,6 @@ def test_api_key(request):
 ############################################
 # Gemini query endpoint
 ############################################
-@csrf_exempt
 @api_view(["POST"])
 def ask_gemini(request, max_retries=2, delay=2):
     model_names = [
@@ -302,7 +300,6 @@ def ask_gemini(request, max_retries=2, delay=2):
 ############################################
 # Clear token + cookie
 ############################################
-@csrf_exempt
 @api_view(["POST"])
 def clear_token(request):
     token = request.COOKIES.get("gemini_token")

@@ -226,37 +226,33 @@ EOF
     # Patch api/views.py to add @csrf_exempt to all views
     echo "Patching api/views.py to add CSRF exemptions..."
     cat > /tmp/patch_api_views.py << 'EOF'
+import re
+
 # Read the views file
 with open('/opt/app/backend/api/views.py', 'r') as f:
-    lines = f.readlines()
+    content = f.read()
 
-# Process line by line
-new_lines = []
-i = 0
-while i < len(lines):
-    line = lines[i]
-    
-    # If we find @api_view, check if @csrf_exempt is already above it
-    if '@api_view' in line:
-        # Look back to see if csrf_exempt is already there
-        has_csrf_exempt = False
-        for j in range(max(0, i-5), i):
-            if '@csrf_exempt' in lines[j]:
-                has_csrf_exempt = True
-                break
-        
-        # If not, add it
-        if not has_csrf_exempt:
-            new_lines.append('@csrf_exempt\n')
-    
-    new_lines.append(line)
-    i += 1
+# Find all function definitions that use @api_view decorator
+# and don't already have @csrf_exempt
+pattern = r'(@api_view\([^\)]+\)\s*\n)(def\s+\w+)'
+
+def add_csrf_exempt(match):
+    decorator = match.group(1)
+    func_def = match.group(2)
+    # Check if csrf_exempt is already there
+    if '@csrf_exempt' in decorator:
+        return match.group(0)
+    # Add @csrf_exempt before @api_view
+    return f'@csrf_exempt\n{decorator}{func_def}'
+
+# Apply the pattern
+new_content = re.sub(pattern, add_csrf_exempt, content)
 
 # Write back
 with open('/opt/app/backend/api/views.py', 'w') as f:
-    f.writelines(new_lines)
+    f.write(new_content)
 
-print("api/views.py patched - added @csrf_exempt to all API views")
+print("api/views.py patched successfully")
 EOF
     
     /opt/python/bin/python3 /tmp/patch_api_views.py
@@ -303,26 +299,13 @@ new_staticfiles = """STATICFILES_DIRS = [
 ]"""
 content = content.replace(old_staticfiles, new_staticfiles)
 
-# Fix CORS_ALLOWED_ORIGINS to include localhost:8000
-old_cors = '''CORS_ALLOWED_ORIGINS = [
-    "https://llm-web-app-4970.onrender.com",
-    "http://localhost:5173"
-]'''
-new_cors = '''CORS_ALLOWED_ORIGINS = [
-    "http://localhost:8000",
-    "http://127.0.0.1:8000",
-    "https://llm-web-app-4970.onrender.com",
-    "http://localhost:5173"
-]'''
-content = content.replace(old_cors, new_cors)
-
 # Fix CSRF_TRUSTED_ORIGINS for localhost
 content = content.replace(
-    'CSRF_TRUSTED_ORIGINS = [\n    "http://localhost:8000",\n    "http://127.0.0.1:8000",\n    "https://llm-web-app-4970.onrender.com/",  \n]',
+    'CSRF_TRUSTED_ORIGINS = [\n    "https://llm-web-app-4970.onrender.com/",  \n]',
     '''CSRF_TRUSTED_ORIGINS = [
     "http://localhost:8000",
     "http://127.0.0.1:8000",
-    "https://llm-web-app-4970.onrender.com",  
+    "https://llm-web-app-4970.onrender.com/",  
 ]'''
 )
 
@@ -341,7 +324,7 @@ EOF
     grep -q "REACT_BUILD_DIR" /opt/app/backend/backend_project/settings.py && echo "✓ REACT_BUILD_DIR added" || echo "✗ REACT_BUILD_DIR not found"
     grep -q "'DIRS': \[REACT_BUILD_DIR\]" /opt/app/backend/backend_project/settings.py && echo "✓ DIRS updated" || echo "✗ DIRS not updated"
     grep -q "STATIC_URL = '/assets/'" /opt/app/backend/backend_project/settings.py && echo "✓ STATIC_URL updated to /assets/" || echo "✗ STATIC_URL not updated"
-    grep -q '"http://localhost:8000"' /opt/app/backend/backend_project/settings.py && echo "✓ CORS_ALLOWED_ORIGINS updated" || echo "✗ CORS not updated"
+    grep -q "http://localhost:8000" /opt/app/backend/backend_project/settings.py && echo "✓ CSRF_TRUSTED_ORIGINS updated" || echo "✗ CSRF not updated"
     
     # Collect static files
     echo "Collecting static files..."
