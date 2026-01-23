@@ -13,6 +13,7 @@ urlpatterns = [
     path("api/tokenize/", api_views.tokenize_key),
     path("api/ask/", api_views.ask_gemini),
     path("api/clear-token/", api_views.clear_token),
+    path('api/test-key/', views.test_api_key, name='test_key'),
 
     # Root route -> React
     path("", frontend),

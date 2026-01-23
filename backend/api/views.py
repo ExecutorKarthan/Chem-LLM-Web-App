@@ -190,11 +190,9 @@ def test_api_key(request):
 @api_view(["POST"])
 def ask_gemini(request, max_retries=2, delay=2):
     model_names = [
-        "gemini-3-pro-preview",
-        "gemini-3-flash-preview",
+        "gemini-3-flash",
         "gemini-2.5-flash",
         "gemini-2.5-flash-lite",
-        "gemini-2.5-pro",
     ]
 
     # Get token from cookie
