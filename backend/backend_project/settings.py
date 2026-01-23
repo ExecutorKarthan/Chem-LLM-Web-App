@@ -86,12 +86,19 @@ CSRF_COOKIE_SECURE = not DEBUG  # True in production (HTTPS), False in dev (HTTP
 # Cache Configuration (REQUIRED for token storage)
 ############################################
 CACHES = {
-    'default': {
-        'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
-        'LOCATION': 'unique-snowflake',
-        'TIMEOUT': 5400,  # 90 minutes
+    "default": {
+        "BACKEND": "django_redis.cache.RedisCache",
+        "LOCATION": os.getenv(
+            "REDIS_URL",
+            "redis://127.0.0.1:6379/1"
+        ),
+        "OPTIONS": {
+            "CLIENT_CLASS": "django_redis.client.DefaultClient",
+        },
+        "TIMEOUT": 5400,
     }
 }
+
 
 ############################################
 # Static files (React build)
