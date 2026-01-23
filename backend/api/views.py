@@ -132,10 +132,12 @@ def tokenize_key(request):
 def list_models(request):
     """Debug endpoint to list available Gemini models"""
     token = request.COOKIES.get("gemini_token")
+    print(token)
     if not token:
         return Response({"error": "No token"}, status=401)
     
     api_key = cache.get(token)
+    print(api_key)
     if not api_key:
         return Response({"error": "Invalid token"}, status=403)
     

@@ -41,6 +41,11 @@ From: rockylinux:9
     export SERVER_PORT=8000
     export WORKERS=4
 
+    # Redis for dev/prod style
+    export REDIS_HOST=127.0.0.1
+    export REDIS_PORT=6379
+    export REDIS_PASSWORD=""   # optional for dev; set if you want auth
+
 %post
     echo "========================================="
     echo "Building Development Container"
@@ -60,6 +65,23 @@ From: rockylinux:9
         bzip2-devel readline-devel xz-devel ncurses-devel \
         gdbm-devel libpcap-devel expat-devel libdb-devel \
         || { echo "ERROR: Failed to install system dependencies"; exit 1; }
+
+    # === Install Redis ===
+    echo "Installing Redis..."
+    dnf install -y redis || { echo "ERROR: Failed to install Redis"; exit 1; }
+
+    # Create directories for data and logs
+    mkdir -p /opt/app/redis-data
+    mkdir -p /opt/app/redis-logs
+    touch /opt/app/redis.conf
+
+    # Configure Redis for dev/prod style
+    sed -i 's/^bind .*/bind 0.0.0.0/' /opt/app/redis.conf           # Allow connections inside container
+    sed -i 's/^protected-mode .*/protected-mode yes/' /opt/app/redis.conf
+    sed -i "s|^dir .*|dir /opt/app/redis-data|" /opt/app/redis.conf
+    sed -i "s|^logfile .*|logfile /opt/app/redis-logs/redis.log|" /opt/app/redis.conf
+    sed -i 's/^daemonize no/daemonize yes/' /opt/app/redis.conf    # Run as daemon
+    sed -i 's/^supervised no/supervised auto/' /opt/app/redis.conf # Enable supervision (systemd-friendly)
     
     # Install Python 3.11
     echo "Installing Python 3.11..."
@@ -392,6 +414,12 @@ STARTSCRIPT
 
 %runscript
     exec /opt/app/start.sh
+
+    # Start Redis in daemon mode
+    redis-server /etc/redis.conf
+
+    # Optional: wait a moment to ensure Redis is ready
+    sleep 2
 
 %test
     echo "Running container tests..."
