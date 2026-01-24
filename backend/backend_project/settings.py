@@ -62,7 +62,7 @@ MIDDLEWARE = [
 CORS_ALLOWED_ORIGINS = [
     'http://localhost:8000',
     'http://127.0.0.1:8000',
-    'http://localhost:32780',  # Vite dev server
+    'http://localhost:32775',  # Vite dev server
     'https://llmexplorer.engr.wustl.edu',  # HTTPS for production
 ]
 
@@ -72,7 +72,7 @@ CORS_ALLOW_CREDENTIALS = True
 CSRF_TRUSTED_ORIGINS = [
     'http://localhost:8000',
     'http://127.0.0.1:8000',
-    'http://localhost:32780',
+    'http://localhost:32775',
     'https://llmexplorer.engr.wustl.edu',  # HTTPS for production
 ]
 
@@ -90,7 +90,7 @@ CACHES = {
         "BACKEND": "django_redis.cache.RedisCache",
         "LOCATION": os.getenv(
             "REDIS_URL",
-            "redis://127.0.0.1:6379/1"
+            "redis://127.0.0.1:6379/1"  # This should match your Redis setup
         ),
         "OPTIONS": {
             "CLIENT_CLASS": "django_redis.client.DefaultClient",
@@ -131,7 +131,7 @@ TEMPLATES = [
         "DIRS": [
             REACT_BUILD_DIR,  # Serve React index.html
         ],
-        "APP_DIRS": False,
+        "APP_DIRS": True,
         "OPTIONS": {
             "context_processors": [
                 "django.template.context_processors.request",

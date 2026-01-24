@@ -7,7 +7,7 @@ import json
 # Django / DRF imports
 from django.conf import settings
 from django.http import JsonResponse
-from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.csrf import csrf_exempt, ensure_csrf_cookie
 from django.core.cache import cache
 from django.middleware.csrf import get_token
 
@@ -23,6 +23,7 @@ from google.genai.errors import ClientError, ServerError
 ############################################
 # CSRF Token endpoint
 ############################################
+@ensure_csrf_cookie
 def get_csrf_token(request):
     """Return CSRF token for frontend"""
     token = get_token(request)
@@ -74,10 +75,10 @@ def check_cookie(request):
 ############################################
 # Tokenize API key into cache + secure cookie
 ############################################
+@ensure_csrf_cookie
 def tokenize_key(request):
     if request.method != "POST":
         return JsonResponse({"error": "Invalid request method"}, status=405)
-
     try:
         body = json.loads(request.body)
         api_key = body.get("apiKey")
@@ -88,6 +89,8 @@ def tokenize_key(request):
         # Strip whitespace from API key
         api_key = api_key.strip()
         
+        print(api_key)
+
         print(f"=== TOKENIZE DEBUG ===")
         print(f"Storing API key (length: {len(api_key)})")
         print(f"First 10 chars: {api_key[:10]}...")
@@ -188,9 +191,11 @@ def test_api_key(request):
 @api_view(["POST"])
 def ask_gemini(request, max_retries=2, delay=2):
     model_names = [
-        "gemini-3-flash",
+        "gemini-3-pro-preview",
+        "gemini-3-flash-preview",
         "gemini-2.5-flash",
         "gemini-2.5-flash-lite",
+        "gemini-2.5-pro",
     ]
 
     # Get token from cookie
@@ -204,9 +209,7 @@ def ask_gemini(request, max_retries=2, delay=2):
     api_key = cache.get(token)
     if not api_key:
         return Response(
-            {"error": "Invalid or expired token.",
-                "Token" : token,
-                "API Key" : api_key},
+            {"error": "Invalid or expired token."},
             status=status.HTTP_403_FORBIDDEN,
         )
 

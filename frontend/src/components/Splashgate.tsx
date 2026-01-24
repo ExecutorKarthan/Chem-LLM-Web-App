@@ -4,6 +4,7 @@ import axios from "axios";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faEye, faEyeSlash } from '@fortawesome/free-solid-svg-icons';
 import { BACKEND_URL } from "../config.js";
+import getCSRFToken from "../utils/CSRFReader.js";
 
 // Create an initial page that will restrict people from accessing the app without accepting the terms or providing an API key
 const SplashGate: React.FC = () => {
@@ -13,6 +14,14 @@ const SplashGate: React.FC = () => {
   const [apiKey, setApiKey] = useState("");
   const [error, setError] = useState("");
   const [showApiKey, setShowApiKey] = useState(false);
+
+  const api = axios.create({
+    baseURL: "http://localhost:8000",  // backend URL
+    withCredentials: true,             // must for CSRF cookie
+    headers: {
+      "X-CSRFToken": getCSRFToken() || "",
+    },
+  });
 
   // Generate behavior for the submission button
 const handleSubmit = async () => {
@@ -26,14 +35,24 @@ const handleSubmit = async () => {
   }
   
   try {
+    // First, ensure we have a CSRF token
+    await axios.get(`${BACKEND_URL}/api/csrf/`, { withCredentials: true });
+    
+    const csrfToken = getCSRFToken();
+    console.log('🔐 CSRF token:', csrfToken ? 'Found' : 'Not found');
+    
     const url = `${BACKEND_URL}/api/tokenize-key/`;
     console.log('🔑 Tokenizing key at:', url);
-    console.log('🔑 Full URL will be:', new URL(url, window.location.href).href);
     
     const response = await axios.post(
       url,
       { apiKey: apiKey.trim() },
-      { withCredentials: true }
+      { 
+        withCredentials: true,
+        headers: {
+          'X-CSRFToken': csrfToken || '',
+        }
+      },
     );
     
     console.log('✅ Tokenize response:', response.status);
@@ -44,9 +63,10 @@ const handleSubmit = async () => {
     } else {
       setError("Failed to authenticate API key.");
     }
-  } catch (err) {
+  } catch (err: any) {
     console.error("❌ Tokenize error:", err);
-    setError("Failed to connect to the server.");
+    console.error("Error response:", err.response?.data);
+    setError(err.response?.data?.error || "Failed to connect to the server.");
   }
 };
 

@@ -5,13 +5,12 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [react()],
     server: {
-      host: 'localhost',
-      port: 32780,
+      host: '0.0.0.0',   // REQUIRED for Apptainer / Docker
+      port: 32775,
+      strictPort: true,
       proxy: {
         '/api': {
-          target: mode === 'production' 
-            ? 'http://llmexplorer.engr.wustl.edu:8000'
-            : 'http://localhost:8000',
+          target: 'http://localhost:8000',
           changeOrigin: true,
           secure: false,
         },

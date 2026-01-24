@@ -41,6 +41,11 @@ From: rockylinux:9
     export SERVER_PORT=8000
     export WORKERS=4
 
+    # Redis Configuration
+    export REDIS_HOST=127.0.0.1
+    export REDIS_PORT=6379
+    export REDIS_URL="redis://127.0.0.1:6379/1"
+
 %post
     echo "========================================="
     echo "Building Production Container"
@@ -60,6 +65,58 @@ From: rockylinux:9
         bzip2-devel readline-devel xz-devel ncurses-devel \
         gdbm-devel libpcap-devel expat-devel libdb-devel \
         || { echo "ERROR: Failed to install system dependencies"; exit 1; }
+
+    # === Install Redis ===
+    echo "Installing Redis..."
+    dnf install -y redis || { echo "ERROR: Failed to install Redis"; exit 1; }
+
+    # Create directories for Redis data and logs
+    mkdir -p /opt/app/redis-data
+    mkdir -p /opt/app/redis-logs
+
+    # Create Redis configuration file in the correct location
+    cat > /etc/redis.conf << 'REDISCONF'
+# Redis Configuration for LLM Web App Container
+bind 127.0.0.1
+protected-mode yes
+port 6379
+tcp-backlog 511
+timeout 0
+tcp-keepalive 300
+
+# Disable daemonize - we'll run it in background with &
+daemonize no
+
+# Logging
+loglevel notice
+logfile /opt/app/redis-logs/redis.log
+
+# Snapshotting (persistence)
+save 900 1
+save 300 10
+save 60 10000
+stop-writes-on-bgsave-error yes
+rdbcompression yes
+rdbchecksum yes
+dbfilename dump.rdb
+dir /opt/app/redis-data
+
+# Limits
+maxmemory 256mb
+maxmemory-policy allkeys-lru
+
+# Append only file (for durability)
+appendonly yes
+appendfilename "appendonly.aof"
+appendfsync everysec
+REDISCONF
+
+    # Make directories writable
+    chmod 777 /opt/app/redis-data
+    chmod 777 /opt/app/redis-logs
+
+    # Test Redis configuration
+    redis-server /etc/redis.conf --test-config || { echo "ERROR: Invalid Redis config"; exit 1; }
     
     # Install Python 3.11
     echo "Installing Python 3.11..."
@@ -226,37 +283,33 @@ EOF
     # Patch api/views.py to add @csrf_exempt to all views
     echo "Patching api/views.py to add CSRF exemptions..."
     cat > /tmp/patch_api_views.py << 'EOF'
+import re
+
 # Read the views file
 with open('/opt/app/backend/api/views.py', 'r') as f:
-    lines = f.readlines()
+    content = f.read()
 
-# Process line by line
-new_lines = []
-i = 0
-while i < len(lines):
-    line = lines[i]
-    
-    # If we find @api_view, check if @csrf_exempt is already above it
-    if '@api_view' in line:
-        # Look back to see if csrf_exempt is already there
-        has_csrf_exempt = False
-        for j in range(max(0, i-5), i):
-            if '@csrf_exempt' in lines[j]:
-                has_csrf_exempt = True
-                break
-        
-        # If not, add it
-        if not has_csrf_exempt:
-            new_lines.append('@csrf_exempt\n')
-    
-    new_lines.append(line)
-    i += 1
+# Find all function definitions that use @api_view decorator
+# and don't already have @csrf_exempt
+pattern = r'(@api_view\([^\)]+\)\s*\n)(def\s+\w+)'
+
+def add_csrf_exempt(match):
+    decorator = match.group(1)
+    func_def = match.group(2)
+    # Check if csrf_exempt is already there
+    if '@csrf_exempt' in decorator:
+        return match.group(0)
+    # Add @csrf_exempt before @api_view
+    return f'@csrf_exempt\n{decorator}{func_def}'
+
+# Apply the pattern
+new_content = re.sub(pattern, add_csrf_exempt, content)
 
 # Write back
 with open('/opt/app/backend/api/views.py', 'w') as f:
-    f.writelines(new_lines)
+    f.write(new_content)
 
-print("api/views.py patched - added @csrf_exempt to all API views")
+print("api/views.py patched successfully")
 EOF
     
     /opt/python/bin/python3 /tmp/patch_api_views.py
@@ -337,7 +390,7 @@ EOF
     # Verify the patch
     echo "Verifying patch..."
     grep -q "REACT_BUILD_DIR" /opt/app/backend/backend_project/settings.py && echo "✓ REACT_BUILD_DIR added" || echo "✗ REACT_BUILD_DIR not found"
-    grep -q "'DIRS': \[REACT_BUILD_DIR\]" /opt/app/backend_project/settings.py && echo "✓ DIRS updated" || echo "✗ DIRS not updated"
+    grep -q "'DIRS': \[REACT_BUILD_DIR\]" /opt/app/backend/backend_project/settings.py && echo "✓ DIRS updated" || echo "✗ DIRS not updated"
     grep -q "STATIC_URL = '/assets/'" /opt/app/backend/backend_project/settings.py && echo "✓ STATIC_URL updated to /assets/" || echo "✗ STATIC_URL not updated"
     grep -q '"http://llmexplorer.engr.wustl.edu:8000"' /opt/app/backend/backend_project/settings.py && echo "✓ CORS_ALLOWED_ORIGINS updated" || echo "✗ CORS not updated"
     
@@ -367,7 +420,6 @@ export DJANGO_SECRET_KEY=$(cat /opt/app/.secret_key)
 cd /opt/app/backend
 
 # Create logs directory in /tmp (writable in container)
-# /tmp is always writable in Apptainer containers
 mkdir -p /tmp/llm-app-logs || {
     echo "ERROR: Failed to create logs directory"
     echo "Falling back to stdout/stderr logging"
@@ -375,7 +427,7 @@ mkdir -p /tmp/llm-app-logs || {
     LOG_ERROR="-"
 }
 
-# Set log paths (fallback to stdout/stderr if mkdir failed)
+# Set log paths
 LOG_ACCESS=${LOG_ACCESS:-/tmp/llm-app-logs/access.log}
 LOG_ERROR=${LOG_ERROR:-/tmp/llm-app-logs/error.log}
 
@@ -384,8 +436,16 @@ echo "LLM Web App - Production"
 echo "========================================="
 echo "Server: http://${SERVER_HOST}:${SERVER_PORT}"
 echo "Workers: ${WORKERS}"
+echo "Redis: ${REDIS_URL}"
 echo "Logs: ${LOG_ACCESS}"
 echo "========================================="
+
+# Verify Redis is still running before starting Django
+if ! redis-cli ping > /dev/null 2>&1; then
+    echo "ERROR: Redis is not running!"
+    echo "Django requires Redis for session/cache storage."
+    exit 1
+fi
 
 # Start gunicorn
 exec /opt/python/bin/gunicorn \
@@ -406,6 +466,45 @@ STARTSCRIPT
     echo "========================================="
 
 %runscript
+    #!/bin/bash
+    
+    echo "========================================="
+    echo "Starting LLM Web App - Production"
+    echo "========================================="
+    
+    # Create logs directory first
+    mkdir -p /tmp/llm-app-logs
+    
+    # Start Redis in background
+    echo "Starting Redis..."
+    redis-server /etc/redis.conf > /tmp/llm-app-logs/redis-startup.log 2>&1 &
+    REDIS_PID=$!
+    
+    # Wait for Redis to be ready
+    echo "Waiting for Redis to start..."
+    for i in {1..30}; do
+        if redis-cli ping > /dev/null 2>&1; then
+            echo "✓ Redis is ready (PID: $REDIS_PID)"
+            break
+        fi
+        if [ $i -eq 30 ]; then
+            echo "ERROR: Redis failed to start within 30 seconds"
+            cat /tmp/llm-app-logs/redis-startup.log
+            exit 1
+        fi
+        sleep 1
+    done
+    
+    # Verify Redis is working
+    redis-cli SET test_key "test_value" > /dev/null || {
+        echo "ERROR: Redis is not responding to commands"
+        exit 1
+    }
+    redis-cli DEL test_key > /dev/null
+    echo "✓ Redis connection test passed"
+    
+    # Now start the Django app
+    echo "Starting Django application..."
     exec /opt/app/start.sh
 
 %test
@@ -429,6 +528,11 @@ STARTSCRIPT
     # Test secret key file exists
     echo "Testing secret key..."
     [ -f "/opt/app/.secret_key" ] || { echo "ERROR: .secret_key missing"; exit 1; }
+    
+    # Test Redis
+    echo "Testing Redis..."
+    redis-server /etc/redis.conf --test-config || { echo "ERROR: Redis config invalid"; exit 1; }
+    [ -f "/etc/redis.conf" ] || { echo "ERROR: /etc/redis.conf missing"; exit 1; }
     
     # Test Django
     echo "Testing Django..."

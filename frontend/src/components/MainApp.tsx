@@ -57,44 +57,38 @@ const MainApp = () => {
 
   // Define behavior for form submission
   const onSubmit = async () => {
-    // If there is no data in the query box, return nothing and end the process
-    if (!userQuery.trim()) return;
-    // Set variable defaults if there is a query
-    setLoading(true);
-    setResponse("");
-    setError(""); 
-    
-    // Get CSRF token from cookie
+  if (!userQuery.trim()) return;
+  
+  setLoading(true);
+  setResponse("");
+  setError(""); 
+  
+  try {
+    // Get fresh CSRF token
     const csrfToken = getCookie('csrftoken');
     console.log('CSRF token:', csrfToken ? 'Found' : 'Not found');
     
-    // Attempt to pass the query and API key to the backend for processing if submitted - wait for a response
-    try {
-      const res = await axios.post(
-        `${BACKEND_URL}` + "/api/ask/",
-        {
-          prompt: userQuery.trim(),
-        },
-        {
-          withCredentials: true,
-          headers: csrfToken ? {
-            'X-CSRFToken': csrfToken
-          } : {}
+    const res = await axios.post(
+      `${BACKEND_URL}/api/ask/`,
+      {
+        prompt: userQuery.trim(),
+      },
+      {
+        withCredentials: true,
+        headers: {
+          'X-CSRFToken': csrfToken || ''
         }
-      );
-      setResponse(res.data.response);
-    }
-    //If an error occurs, provide it to the user
-    catch (err: any) {
-      console.error("Full error object:", err);
-      console.error("Error response:", err?.response);
-      const backendError = err?.response?.data?.error || "Unexpected error occurred.";
-      setError(backendError);        
-      setResponse(backendError);     
-    } 
-    // If there is no response yet, 
-    finally {
-      setLoading(false);
+      }
+    );
+    setResponse(res.data.response);
+  } catch (err: any) {
+    console.error("Full error object:", err);
+    console.error("Error response:", err?.response);
+    const backendError = err?.response?.data?.error || "Unexpected error occurred.";
+    setError(backendError);        
+    setResponse(backendError);     
+  } finally {
+    setLoading(false);
     }
   };
 
