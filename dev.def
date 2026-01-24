@@ -53,7 +53,7 @@ From: rockylinux:9
     
     # Update system and install build dependencies
     echo "Installing system dependencies..."
-    dnf update -y
+    dnf -y install dnf-plugins-core
 
     # Enable CRB repository (required for gdbm-devel, libpcap-devel, etc.)
     dnf install -y dnf-plugins-core
@@ -87,9 +87,8 @@ tcp-keepalive 300
 # Disable daemonize - we'll run it in background with &
 daemonize no
 
-# Logging
+# Logging - will be overridden at runtime
 loglevel notice
-logfile /opt/app/redis-logs/redis.log
 
 # Snapshotting (persistence)
 save 900 1
@@ -116,7 +115,11 @@ REDISCONF
     chmod 777 /opt/app/redis-logs
 
     # Test Redis configuration
-    redis-server /etc/redis.conf --test-config || { echo "ERROR: Invalid Redis config"; exit 1; }
+    redis-server /etc/redis.conf --daemonize yes
+    sleep 1
+    redis-cli ping || { echo "ERROR: Redis failed to start"; exit 1; }
+    redis-cli shutdown
+
     
     # Install Python 3.11
     echo "Installing Python 3.11..."
@@ -219,6 +222,7 @@ REDISCONF
     echo "Creating application directories..."
     mkdir -p /opt/app/staticfiles
     mkdir -p /opt/app/backend/db
+    mkdir -p /tmp/llm-app-logs
     mkdir -p /opt/app/logs
     chmod 777 /opt/app/logs
     
@@ -467,12 +471,41 @@ STARTSCRIPT
     echo "Starting LLM Web App - Development"
     echo "========================================="
     
-    # Create logs directory first
+    # Create logs directory first - MUST happen before Redis starts
     mkdir -p /tmp/llm-app-logs
+    mkdir -p /tmp/redis-data
+    mkdir -p /tmp/redis-logs
     
-    # Start Redis in background
+ # Create a runtime Redis config that uses /tmp paths
+    cat > /tmp/redis-runtime.conf << 'REDISCONF'
+# Redis Runtime Configuration (uses /tmp for writable paths)
+bind 127.0.0.1
+protected-mode yes
+port 6379
+tcp-backlog 511
+timeout 0
+tcp-keepalive 300
+daemonize no
+loglevel notice
+logfile /tmp/llm-app-logs/redis.log
+save 900 1
+save 300 10
+save 60 10000
+stop-writes-on-bgsave-error yes
+rdbcompression yes
+rdbchecksum yes
+dbfilename dump.rdb
+dir /tmp/redis-data
+maxmemory 256mb
+maxmemory-policy allkeys-lru
+appendonly yes
+appendfilename "appendonly.aof"
+appendfsync everysec
+REDISCONF
+    
+    # Start Redis with the runtime config
     echo "Starting Redis..."
-    redis-server /etc/redis.conf > /tmp/llm-app-logs/redis-startup.log 2>&1 &
+    redis-server /tmp/redis-runtime.conf > /tmp/llm-app-logs/redis-startup.log 2>&1 &
     REDIS_PID=$!
     
     # Wait for Redis to be ready
@@ -484,17 +517,22 @@ STARTSCRIPT
         fi
         if [ $i -eq 30 ]; then
             echo "ERROR: Redis failed to start within 30 seconds"
-            cat /tmp/llm-app-logs/redis-startup.log
+            echo "===== Redis startup log ====="
+            cat /tmp/llm-app-logs/redis-startup.log 2>/dev/null || echo "No log file found"
+            echo "============================="
             exit 1
         fi
         sleep 1
     done
     
     # Verify Redis is working
-    redis-cli SET test_key "test_value" > /dev/null || {
+    if ! redis-cli SET test_key "test_value" > /dev/null 2>&1; then
         echo "ERROR: Redis is not responding to commands"
+        echo "===== Redis startup log ====="
+        cat /tmp/llm-app-logs/redis-startup.log 2>/dev/null || echo "No log file found"
+        echo "============================="
         exit 1
-    }
+    fi
     redis-cli DEL test_key > /dev/null
     echo "✓ Redis connection test passed"
     
@@ -524,10 +562,12 @@ STARTSCRIPT
     echo "Testing secret key..."
     [ -f "/opt/app/.secret_key" ] || { echo "ERROR: .secret_key missing"; exit 1; }
     
-    # Test Redis
-    echo "Testing Redis..."
-    redis-server /etc/redis.conf --test-config || { echo "ERROR: Redis config invalid"; exit 1; }
+    # Test Redis files only (no runtime state)
+    echo "Testing Redis installation..."
+    command -v redis-server >/dev/null || { echo "ERROR: redis-server missing"; exit 1; }
+    command -v redis-cli >/dev/null || { echo "ERROR: redis-cli missing"; exit 1; }
     [ -f "/etc/redis.conf" ] || { echo "ERROR: /etc/redis.conf missing"; exit 1; }
+
     
     # Test Django
     echo "Testing Django..."
