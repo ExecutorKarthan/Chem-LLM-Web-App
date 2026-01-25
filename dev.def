@@ -176,6 +176,12 @@ REDISCONF
         || { echo "ERROR: Failed to clone repository. Update GitHub URL in development.def"; exit 1; }
     
     cd /opt/app
+
+    # IMPORTANT: Clear any Python bytecode cache
+    echo "Clearing Python cache..."
+    find /opt/app -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+    find /opt/app -type f -name "*.pyc" -delete 2>/dev/null || true
+    find /opt/app -type f -name "*.pyo" -delete 2>/dev/null || true
     
     # Verify repository structure
     if [ ! -d "backend" ] || [ ! -d "frontend" ]; then
@@ -409,7 +415,7 @@ EOF
     dnf clean all
     
     # Create startup script
-    cat > /opt/app/start.sh << 'STARTSCRIPT'
+cat > /opt/app/start.sh << 'STARTSCRIPT'
 #!/bin/bash
 
 # Load the auto-generated secret key
@@ -437,6 +443,7 @@ echo "Server: http://localhost:${SERVER_PORT}"
 echo "Workers: ${WORKERS}"
 echo "Redis: ${REDIS_URL}"
 echo "Logs: ${LOG_ACCESS}"
+echo "Django logs: /tmp/llm-app-logs/django.log"
 echo "========================================="
 
 # Verify Redis is still running before starting Django
@@ -446,16 +453,18 @@ if ! redis-cli ping > /dev/null 2>&1; then
     exit 1
 fi
 
-# Start gunicorn
+# Start gunicorn with CAPTURE OUTPUT enabled
 exec /opt/python/bin/gunicorn \
     --bind ${SERVER_HOST}:${SERVER_PORT} \
     --workers ${WORKERS} \
     --timeout 120 \
     --access-logfile ${LOG_ACCESS} \
     --error-logfile ${LOG_ERROR} \
-    --log-level info \
+    --capture-output \
+    --enable-stdio-inheritance \
+    --log-level debug \
     --chdir /opt/app/backend \
-    backend_project.wsgi:application
+    backend_project.wsgi:application 2>&1 | tee /tmp/llm-app-logs/django.log
 STARTSCRIPT
     
     chmod +x /opt/app/start.sh
@@ -470,6 +479,11 @@ STARTSCRIPT
     echo "========================================="
     echo "Starting LLM Web App - Development"
     echo "========================================="
+    
+    # Clear Python bytecode cache before starting
+    echo "Clearing Python cache..."
+    find /opt/app -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+    find /opt/app -type f -name "*.pyc" -delete 2>/dev/null || true
     
     # Create logs directory first - MUST happen before Redis starts
     mkdir -p /tmp/llm-app-logs
