@@ -403,12 +403,18 @@ def ask_gemini(request, max_retries=2, delay=2):
                 )
 
                 logger.info(f"[ASK_GEMINI] SUCCESS! Model {model_name} responded")
-                logger.info(f"[ASK_GEMINI] Response length: {len(response.text)}")
-                logger.info(f"[ASK_GEMINI] Response preview: {response.text[:100]}...")
+
+                # Handle None response.text (happens with thought_signature or other non-text parts)
+                response_text = response.text if response.text is not None else ""
+                logger.info(f"[ASK_GEMINI] Response length: {len(response_text)}")
+                if response_text:
+                    logger.info(f"[ASK_GEMINI] Response preview: {response_text[:100]}...")
+                else:
+                    logger.warning("[ASK_GEMINI] Response text is None, returning empty string")
                 logger.info("=" * 80)
-                
+
                 return Response(
-                    {"response": response.text},
+                    {"response": response_text},
                     status=status.HTTP_200_OK,
                 )
 
