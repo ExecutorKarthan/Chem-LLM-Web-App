@@ -3,6 +3,7 @@ from django.contrib import admin
 from django.urls import path, re_path
 from django.conf import settings
 from django.conf.urls.static import static
+from django.views.static import serve
 from backend_project.views import frontend
 from api import views as api_views
 
@@ -19,13 +20,14 @@ urlpatterns = [
     path("api/ask/", api_views.ask_gemini),
     path("api/clear-token/", api_views.clear_token),
 
+    # Explicitly serve assets from React build
+    re_path(r'^assets/(?P<path>.*)$', serve, {
+        'document_root': settings.BASE_DIR.parent / 'frontend' / 'dist' / 'assets',
+    }),
+
     # Root route -> React
     path("", frontend, name="frontend_root"),
 
     # SPA fallback: anything not /api, /admin, or /assets
     re_path(r"^(?!api/|admin/|assets/).*$", frontend, name="frontend_catchall"),
 ]
-
-# Serve static files in development
-if settings.DEBUG:
-    urlpatterns += static(settings.STATIC_URL, document_root=settings.STATIC_ROOT)
