@@ -1,5 +1,5 @@
 # ========================================
-# Windows Dev Environment Setup Script (PowerShell)
+# Windows Django Dev Environment Setup Script
 # ========================================
 
 Write-Host ""
@@ -8,20 +8,30 @@ Write-Host "LLM Explorer - Dev Setup (Windows)" -ForegroundColor Cyan
 Write-Host "=====================================" -ForegroundColor Cyan
 Write-Host ""
 
-# Check Python
+# ========================================
+# Python Check
+# ========================================
+
+Write-Host "Checking Python installation..." -ForegroundColor Cyan
+
+$PYTHON_CMD = "C:\Users\josep\AppData\Local\Programs\Python\Python313\python.exe"
+
 try {
-    $pythonVersion = python --version 2>&1
-    Write-Host "[1/6] Python detected: $pythonVersion" -ForegroundColor Green
+    $pythonVersion = & $PYTHON_CMD --version
+    Write-Host "Found $pythonVersion" -ForegroundColor Green
 } catch {
-    Write-Host "ERROR: Python is not installed or not in PATH" -ForegroundColor Red
-    Write-Host "Please install Python 3.8+ from python.org" -ForegroundColor Yellow
+    Write-Host "ERROR: Python not found at $PYTHON_CMD" -ForegroundColor Red
+    Write-Host "Please adjust the path to your Python installation." -ForegroundColor Yellow
     pause
     exit 1
 }
 
-# Check Node.js
+# ========================================
+# Node.js Check
+# ========================================
+
 try {
-    $nodeVersion = node --version 2>&1
+    $nodeVersion = node --version
     Write-Host "[1/6] Node.js detected: $nodeVersion" -ForegroundColor Green
 } catch {
     Write-Host "ERROR: Node.js is not installed or not in PATH" -ForegroundColor Red
@@ -33,83 +43,83 @@ try {
 Write-Host ""
 
 # ========================================
-# Backend Setup
+# Backend Setup (Django)
 # ========================================
 
 Write-Host "[2/6] Setting up Django backend..." -ForegroundColor Yellow
 Set-Location backend
 
-# Create virtual environment
-if (-Not (Test-Path "venv")) {
-    Write-Host "  Creating virtual environment..." -ForegroundColor Gray
-    python -m venv venv
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "ERROR: Failed to create virtual environment" -ForegroundColor Red
-        pause
-        exit 1
-    }
+# Remove old venv if exists
+if (Test-Path "venv") {
+    Write-Host "  Removing old virtual environment..." -ForegroundColor Gray
+    Remove-Item -Recurse -Force venv
 }
 
-# Activate virtual environment
-& .\venv\Scripts\Activate.ps1
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "ERROR: Failed to activate virtual environment" -ForegroundColor Red
-    Write-Host "You may need to allow script execution: Set-ExecutionPolicy RemoteSigned -Scope CurrentUser" -ForegroundColor Yellow
+# Create virtual environment with Python 3.13
+Write-Host "  Creating virtual environment with Python 3.13..." -ForegroundColor Gray
+& $PYTHON_CMD -m venv venv
+
+$VENV_PYTHON = ".\venv\Scripts\python.exe"
+$venvVersion = & $VENV_PYTHON --version
+Write-Host "  Venv Python: $venvVersion" -ForegroundColor Green
+
+# Upgrade pip, setuptools, wheel
+Write-Host "  Upgrading pip, setuptools, wheel..." -ForegroundColor Gray
+& $VENV_PYTHON -m pip install --upgrade pip setuptools wheel
+
+# Install backend dependencies from requirements.txt
+Write-Host "  Installing Python dependencies from requirements.txt..." -ForegroundColor Gray
+$requirementsPath = "requirements.txt"
+
+if (-Not (Test-Path $requirementsPath)) {
+    Write-Host "ERROR: requirements.txt not found at $requirementsPath" -ForegroundColor Red
     pause
     exit 1
 }
 
-# Install dependencies
-Write-Host "  Installing Python dependencies..." -ForegroundColor Gray
-pip install --quiet --upgrade pip
-pip install --quiet django djangorestframework django-cors-headers python-dotenv whitenoise google-generativeai
+& $VENV_PYTHON -m pip install -r $requirementsPath
 
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "ERROR: Failed to install Python dependencies" -ForegroundColor Red
+    Write-Host "ERROR: Failed to install Python dependencies from requirements.txt" -ForegroundColor Red
     pause
     exit 1
 }
 
-Write-Host ""
+# ========================================
+# Django Secret Key
+# ========================================
+
 Write-Host "[3/6] Generating Django secret key..." -ForegroundColor Yellow
 
-# Generate secret key and create .env file in backend_project/ subdirectory
-$secretKey = python -c "from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())"
-$envContent = @"
+$secretKey = & $VENV_PYTHON -c "from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())"
+
+@"
 DJANGO_SECRET_KEY=$secretKey
 DJANGO_DEBUG=True
-"@
+"@ | Set-Content backend_project\.env
 
-Set-Content -Path "backend_project\.env" -Value $envContent
-Write-Host "  Secret key generated and saved to backend_project/.env" -ForegroundColor Green
+Write-Host "  Secret key saved to backend_project/.env" -ForegroundColor Green
 
-Write-Host ""
+# ========================================
+# Database Migrations
+# ========================================
+
 Write-Host "[4/6] Running database migrations..." -ForegroundColor Yellow
-python manage.py migrate --noinput
-
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "  WARNING: Database migration had issues (usually OK for first run)" -ForegroundColor Yellow
-}
+& $VENV_PYTHON manage.py migrate --noinput
 
 Write-Host "  Backend setup complete!" -ForegroundColor Green
 Write-Host ""
 
 # ========================================
-# Frontend Setup
+# Frontend Setup (React)
 # ========================================
 
 Set-Location ..\frontend
-
 Write-Host "[5/6] Setting up React frontend..." -ForegroundColor Yellow
 
 if (-Not (Test-Path "node_modules")) {
     Write-Host "  Installing Node.js dependencies..." -ForegroundColor Gray
     npm install
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "ERROR: Failed to install Node.js dependencies" -ForegroundColor Red
-        pause
-        exit 1
-    }
 } else {
     Write-Host "  Node modules already installed, skipping..." -ForegroundColor Gray
 }
@@ -122,24 +132,55 @@ Write-Host ""
 # ========================================
 
 Set-Location ..
-
-Write-Host "[6/6] Installing root dependencies (concurrently)..." -ForegroundColor Yellow
+Write-Host "[6/6] Installing root dependencies..." -ForegroundColor Yellow
 
 if (-Not (Test-Path "node_modules\concurrently")) {
     npm install
 }
 
 Write-Host ""
-Write-Host "=====================================" -ForegroundColor Green
+Write-Host "====================================="
 Write-Host "Setup Complete!" -ForegroundColor Green
-Write-Host "=====================================" -ForegroundColor Green
-Write-Host ""
-Write-Host "To start the dev servers, run:" -ForegroundColor Cyan
-Write-Host "  npm run dev" -ForegroundColor White
-Write-Host ""
-Write-Host "This will start:" -ForegroundColor Gray
-Write-Host "  - Django backend on http://localhost:8000" -ForegroundColor Gray
-Write-Host "  - Vite frontend on http://localhost:32775" -ForegroundColor Gray
-Write-Host ""
+Write-Host "====================================="
+
+# Starting from script directory
+$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
+
+# Search recursively for manage.py
+$BackendPath = Get-ChildItem -Path $ScriptDir -Recurse -Directory | Where-Object {
+    Test-Path (Join-Path $_.FullName "manage.py")
+} | Select-Object -First 1
+
+if (-not $BackendPath) {
+    Write-Error "❌ Could not find backend folder with manage.py"
+    exit 1
+}
+
+$BackendPath = $BackendPath.FullName
+Write-Host "✅ Backend folder found: $BackendPath"
+cd $BackendPath
+
+# Search for a venv folder containing Activate.ps1
+$VenvPath = Get-ChildItem -Path $BackendPath -Recurse -Directory | Where-Object {
+    Test-Path (Join-Path $_.FullName "Scripts\Activate.ps1")
+} | Select-Object -First 1
+
+if (-not $VenvPath) {
+    Write-Error "❌ Could not find virtual environment folder"
+    exit 1
+}
+
+$ActivateScript = Join-Path $VenvPath.FullName "Scripts\Activate.ps1"
+Write-Host "✅ Activating virtual environment: $ActivateScript"
+& $ActivateScript
+
+# Optional: run migrations to ensure DB is ready
+python manage.py migrate
+
+Write-Host "✅ Setup complete. Starting Django server at http://localhost:8000..."
+
+# Start Django server (blocking; script will stay running here)
+python manage.py runserver 8000
+
 Write-Host "Press any key to exit..."
 $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")

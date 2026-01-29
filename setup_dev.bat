@@ -58,7 +58,7 @@ if errorlevel 1 (
 
 echo Installing Python dependencies...
 pip install --quiet --upgrade pip
-pip install --quiet django djangorestframework django-cors-headers python-dotenv whitenoise google-generativeai
+pip install --quiet django djangorestframework django-cors-headers python-dotenv whitenoise genai
 if errorlevel 1 (
     echo ERROR: Failed to install Python dependencies
     pause
