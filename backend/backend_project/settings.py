@@ -87,15 +87,7 @@ CSRF_COOKIE_SECURE = not DEBUG  # True in production (HTTPS), False in dev (HTTP
 ############################################
 CACHES = {
     "default": {
-        "BACKEND": "django_redis.cache.RedisCache",
-        "LOCATION": os.getenv(
-            "REDIS_URL",
-            "redis://127.0.0.1:6379/1"  # This should match your Redis setup
-        ),
-        "OPTIONS": {
-            "CLIENT_CLASS": "django_redis.client.DefaultClient",
-        },
-        "TIMEOUT": 5400,
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",  # Use in-memory cache instead
     }
 }
 

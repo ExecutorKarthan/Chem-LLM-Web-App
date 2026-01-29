@@ -5,11 +5,12 @@
   "scripts": {
     "frontend": "cd frontend && npm install && npm run dev",
     "frontend:build": "cd frontend && npm run build",
-    "backend": "cd backend && python manage.py runserver 0.0.0.0:8000",
-    "start": "concurrently \"npm run backend\" \"npm run frontend\"",
+    "backend": "cd backend_project && python manage.py runserver 0.0.0.0:8000",
+    "backend-dev": "cd backend_project && python manage.py runserver 127.0.0.1:8000",
     "start-dev": "cd frontend && npm run dev",
-    "backend-dev": "cd backend && venv/bin/python manage.py runserver 127.0.0.1:8000",
-    "dev": "concurrently  \"npm run backend-dev\" \"npm run start-dev\""
+    "dev": "concurrently \"npm run backend-dev\" \"npm run start-dev\"",
+    "start": "concurrently \"npm run backend\" \"npm run frontend\"",
+    "setup": "node setup_check.js"
   },
   "devDependencies": {
     "concurrently": "^8.2.2"
