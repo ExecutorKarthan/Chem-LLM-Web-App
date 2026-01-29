@@ -14,17 +14,12 @@ Write-Host ""
 
 Write-Host "Checking Python installation..." -ForegroundColor Cyan
 
-$PYTHON_CMD = "C:\Users\josep\AppData\Local\Programs\Python\Python313\python.exe"
-
-try {
-    $pythonVersion = & $PYTHON_CMD --version
-    Write-Host "Found $pythonVersion" -ForegroundColor Green
-} catch {
-    Write-Host "ERROR: Python not found at $PYTHON_CMD" -ForegroundColor Red
-    Write-Host "Please adjust the path to your Python installation." -ForegroundColor Yellow
-    pause
+$PYTHON_CMD = Get-Command python -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source
+if (-not $PYTHON_CMD) {
+    Write-Host "ERROR: Python not found in PATH" -ForegroundColor Red
     exit 1
 }
+Write-Host "Found Python: $PYTHON_CMD" -ForegroundColor Green
 
 # ========================================
 # Node.js Check
@@ -181,6 +176,3 @@ Write-Host "✅ Setup complete. Starting Django server at http://localhost:8000.
 
 # Start Django server (blocking; script will stay running here)
 python manage.py runserver 8000
-
-Write-Host "Press any key to exit..."
-$null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
