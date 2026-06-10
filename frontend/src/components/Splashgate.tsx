@@ -24,7 +24,13 @@ const SplashGate: React.FC = () => {
   });
 
   // Generate behavior for the submission button
-const handleSubmit = async () => {
+const handleSubmit = async (explorerType: 'ai' | 'chemistry') => {
+  if(explorerType === 'ai') {
+    localStorage.setItem("resourceSelection", "ai");
+  }
+  if(explorerType === 'chemistry') {
+    localStorage.setItem("resourceSelection", "chemistry");
+  }
   if (!agreed) {
     setError("You must agree to the terms.");
     return;
@@ -58,7 +64,7 @@ const handleSubmit = async () => {
     console.log('✅ Tokenize response:', response.status);
     
     if (response.status === 200) {
-      localStorage.setItem("gemini_token", "agreed"); 
+      localStorage.setItem("gemini_token", "agreed");
       window.location.reload();
     } else {
       setError("Failed to authenticate API key.");
@@ -158,9 +164,13 @@ const handleSubmit = async () => {
         </small>
       </label>
       {error && <p style={{ color: "red" }}>{error}</p>}
-      {/* Create a button to submit the terms acceptance and API key */}
-      <button onClick={handleSubmit} style={{ padding: "0.75rem 1.5rem" }}>
-        Continue
+      {/* Create a button to submit the terms acceptance, API key and select the AI Explorer */}
+      <button onClick={() => handleSubmit('ai')} style={{ padding: "0.75rem 1.5rem" }}>
+        AI Version
+      </button>
+      {/* Create a button to submit the terms acceptance, API key and select the Chemistry Explorer */}
+      <button onClick={() => handleSubmit('chemistry')} style={{ padding: "0.75rem 1.5rem" }}>
+        Chemistry Version
       </button>
     </div>
   );

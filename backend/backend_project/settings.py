@@ -3,13 +3,15 @@ from pathlib import Path
 from dotenv import load_dotenv
 from corsheaders.defaults import default_headers
 
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+print("Base directory for settings:", BASE_DIR)
 ############################################
 # Environment
 ############################################
-BASE_DIR = Path(__file__).resolve().parent.parent
-
+print("Loading environment variables from .env file at:", BASE_DIR / "backend_project" / ".env")
 # Load .env file if present
-load_dotenv(BASE_DIR / ".env")
+load_dotenv(BASE_DIR / "backend_project" / ".env")
 
 SECRET_KEY = os.getenv("DJANGO_SECRET_KEY")
 if not SECRET_KEY:

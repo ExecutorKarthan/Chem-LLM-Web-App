@@ -14,9 +14,20 @@ Write-Host ""
 
 Write-Host "Checking Python installation..." -ForegroundColor Cyan
 
-$PYTHON_CMD = Get-Command python -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source
-if (-not $PYTHON_CMD) {
+$PYTHON_V = py -0p --list-paths | Select-String -Pattern "3\.(0|1|2|3|4|5|6|7|8|9|10|11|12|13)"
+if (-not $PYTHON_V) {
     Write-Host "ERROR: Python not found in PATH" -ForegroundColor Red
+    exit 1
+}
+foreach ($version in $PYTHON_V) {
+    if($version -notmatch " -V:3.14"){
+        $PYTHON_CMD = $version -replace '.*([a-zA-Z]:\\[^ ]+).*', '$1'
+        Write-Host "Python 3.13 detected: $PYTHON_CMD" -ForegroundColor Green
+        break
+    } 
+}
+if (-not $PYTHON_CMD) {
+    Write-Host "WARNING: Python found but not version 3.13: $PYTHON_CMD" -ForegroundColor Yellow
     exit 1
 }
 Write-Host "Found Python: $PYTHON_CMD" -ForegroundColor Green

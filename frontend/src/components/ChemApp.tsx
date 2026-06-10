@@ -29,8 +29,8 @@ function getCookie(name: string): string | undefined {
   return undefined;
 }
 
-// Define main app
-const MainApp = () => {
+// Define Chem app
+const ChemApp = () => {
   // Define constants for reference
   const [userQuery, updateQuery] = useState<string>("");
   const [writtenCode, updateCode] = useState<string>(
@@ -165,14 +165,7 @@ const MainApp = () => {
             flexDirection: "column",
           }}
         >
-          <PythonEditor code={writtenCode} onChange={updateCode} />
-          {selectedPuzzle && (
-            <img
-              src={selectedPuzzle.image_url}
-              alt={selectedPuzzle.title}
-              style={{ maxWidth: "100%", marginTop: 12, borderRadius: 6 }}
-            />
-          )}
+      **INSERT RDKIT INPUT HERE**
         </Col>
         <Col
           xs={24}
@@ -188,7 +181,7 @@ const MainApp = () => {
             minHeight: 350,
           }}
         >
-          <SkulptDisplay code={writtenCode} onCodeChange={updateCode} />
+          **INSERT RDKIT.JS**
         </Col>
       </Row>
     </>
@@ -196,4 +189,4 @@ const MainApp = () => {
 };
 
 // Export component for use
-export default MainApp;
+export default ChemApp;

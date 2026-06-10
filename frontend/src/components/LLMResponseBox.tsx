@@ -31,6 +31,7 @@ const LLMResponseBox: React.FC<LLMResponseProps> = ({
 const handleClearToken = async () => {
   try {
     localStorage.removeItem("gemini_token");
+    localStorage.removeItem("resourceSelection");
     await axios.post(
       `${BACKEND_URL}` + "/api/clear-token/",
       {},
