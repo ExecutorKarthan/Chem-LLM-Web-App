@@ -79,9 +79,12 @@ const handleClearToken = async () => {
         </div>
       )}
        {/* Create a button to transfer the code to the editor */}
-        <Button onClick={() => onSaveCode(processResponse(response))}>
+        {localStorage.getItem("resourceSelection") === "ai" && (
+          <Button onClick={() => onSaveCode(processResponse(response))}>
           Save to Editor
         </Button>
+        )
+      }
         {/* Add a button to clear the token */}
         <Button danger onClick={handleClearToken}>
           Clear Token

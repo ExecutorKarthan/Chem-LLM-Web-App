@@ -3,18 +3,8 @@ import { useState, useEffect } from "react";
 import axios from "axios";
 import LLMEntryBox from "./LLMEntryBox.js";
 import LLMResponseBox from "./LLMResponseBox.js";
-import PythonEditor from "./PythonEditor.js";
-import SkulptDisplay from "./SkulptDisplay.js";
 import { Row, Col} from "antd";
 import { BACKEND_URL } from "../config.js";
-
-// Create interfaces for type safety
-interface Puzzle {
-  id: number;
-  title: string;
-  image_url: string;
-  code: string;
-}
 
 // Helper function to get CSRF token from cookies
 function getCookie(name: string): string | undefined {
@@ -33,27 +23,10 @@ function getCookie(name: string): string | undefined {
 const ChemApp = () => {
   // Define constants for reference
   const [userQuery, updateQuery] = useState<string>("");
-  const [writtenCode, updateCode] = useState<string>(
-    `# Type your code here! Like this:\nprint("You can do this!")\n`
-  );
   const [response, setResponse] = useState<string>("");
   const [error, setError] = useState<string>(""); 
   const [loading, setLoading] = useState<boolean>(false);
-  const [puzzles, setPuzzles] = useState<Puzzle[]>([]);
-  const [selectedPuzzle, setSelectedPuzzle] = useState<Puzzle | null>(null);
 
-  // Create a hook to load needed content as the main app loads
-  useEffect(() => {
-    // Fetch the puzzle data from the backend server
-    axios
-      .get(`${BACKEND_URL}` + "/api/puzzles/")
-      .then((res) => {
-        setPuzzles(res.data);
-      })
-      .catch((err) => {
-        console.error("Failed to load puzzles:", err);
-      });
-  }, []);
 
   // Define behavior for form submission
   const onSubmit = async () => {
@@ -143,7 +116,7 @@ const ChemApp = () => {
             response={response}
             loading={loading}
             error={error} 
-            onSaveCode={(code) => updateCode(code)}
+            onSaveCode={(code: string) => {""}}
           />
         </Col>
       </Row>
