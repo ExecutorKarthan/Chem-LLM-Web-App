@@ -4,6 +4,7 @@ import os
 import uuid
 import json
 import logging
+import csv
 
 # Django / DRF imports
 from django.conf import settings
@@ -476,6 +477,314 @@ def ask_gemini(request, max_retries=2, delay=2):
         status=status.HTTP_503_SERVICE_UNAVAILABLE,
     )
 
+############################################
+# Helper: load linker CSV as formatted string
+############################################
+LINKER_CSV_PATH = os.path.join(settings.BASE_DIR, "assets", "linker_data.csv")
+
+def load_linker_csv():
+    """
+    Reads the linker CSV from disk and returns a formatted string
+    suitable for inline injection into a Gemini prompt.
+    Raises FileNotFoundError if the CSV is missing.
+    Raises ValueError if the CSV is empty or malformed.
+    """
+    if not os.path.exists(LINKER_CSV_PATH):
+        logger.error(f"[LINKER_CSV] File not found at: {LINKER_CSV_PATH}")
+        raise FileNotFoundError(
+            f"Linker data file not found at {LINKER_CSV_PATH}. "
+            "Please ensure linker_data.csv exists in backend/assets/."
+        )
+
+    rows = []
+    with open(LINKER_CSV_PATH, newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        headers = reader.fieldnames
+        if not headers:
+            raise ValueError("Linker CSV is empty or has no header row.")
+        for row in reader:
+            rows.append(row)
+
+    if not rows:
+        raise ValueError("Linker CSV has headers but contains no data rows.")
+
+    logger.info(f"[LINKER_CSV] Loaded {len(rows)} rows with columns: {headers}")
+
+    # Format as a readable table for Gemini
+    lines = ["LINKER REFERENCE DATA (SMILES notation):"]
+    lines.append(", ".join(headers))
+    lines.append("-" * 80)
+    for row in rows:
+        lines.append(", ".join(str(row.get(h, "")) for h in headers))
+
+    return "\n".join(lines)
+
+
+############################################
+# Prime Gemini with linker CSV data
+############################################
+@csrf_exempt
+@api_view(["POST"])
+def prime_gemini(request, max_retries=2, delay=2):
+    """
+    Sends the linker CSV data to Gemini as a standalone priming call.
+    Returns Gemini's acknowledgment response, prefaced with a success message.
+    """
+    logger.info("=" * 80)
+    logger.info("[PRIME_GEMINI] ========== NEW PRIME REQUEST ==========")
+
+    # --- Load the CSV ---
+    try:
+        csv_content = load_linker_csv()
+    except FileNotFoundError as e:
+        logger.error(f"[PRIME_GEMINI] CSV missing: {e}")
+        return Response(
+            {"error": str(e), "csv_missing": True},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+    except ValueError as e:
+        logger.error(f"[PRIME_GEMINI] CSV invalid: {e}")
+        return Response(
+            {"error": str(e), "csv_missing": True},
+            status=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        )
+
+    # --- Authenticate ---
+    token = request.COOKIES.get("gemini_token")
+    if not token:
+        return Response(
+            {"error": "Missing gemini_token cookie."},
+            status=status.HTTP_401_UNAUTHORIZED,
+        )
+    api_key = cache.get(token)
+    if not api_key:
+        return Response(
+            {"error": "Invalid or expired token."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    # --- Build priming prompt ---
+    priming_prompt = (
+        "You are a chemistry assistant specialising in Metal-Organic Frameworks (MOFs) "
+        "and Covalent Organic Frameworks (COFs). I am providing you with a reference "
+        "dataset of linker molecules in SMILES notation along with their framework "
+        "properties. Please acknowledge you have received this data and briefly summarise "
+        "what it contains so I know you are ready to answer questions about it.\n\n"
+        f"{csv_content}"
+    )
+
+    logger.info(f"[PRIME_GEMINI] Priming prompt length: {len(priming_prompt)} chars")
+
+    model_names = [
+        "gemini-3-pro-preview",
+        "gemini-3-flash-preview",
+        "gemini-2.5-flash",
+        "gemini-2.5-flash-lite",
+        "gemini-2.5-pro",
+    ]
+
+    try:
+        client = genai.Client(api_key=api_key)
+    except Exception as e:
+        logger.error(f"[PRIME_GEMINI] Failed to create Gemini client: {e}", exc_info=True)
+        return Response(
+            {"error": f"Failed to create Gemini client: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+    for model_name in model_names:
+        for attempt in range(max_retries):
+            try:
+                logger.info(f"[PRIME_GEMINI] Trying model: {model_name} (Attempt {attempt + 1}/{max_retries})")
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=priming_prompt,
+                )
+                response_text = response.text if response.text is not None else ""
+                logger.info(f"[PRIME_GEMINI] SUCCESS with {model_name}. Response length: {len(response_text)}")
+                logger.info("=" * 80)
+
+                success_prefix = "✅ Linker data was successfully submitted to Gemini.\n\n"
+                return Response(
+                    {"response": success_prefix + response_text},
+                    status=status.HTTP_200_OK,
+                )
+
+            except ClientError as e:
+                error_message = str(e)
+                logger.error(f"[PRIME_GEMINI] ClientError with {model_name}: {error_message}")
+                if "API_KEY_INVALID" in error_message or "API key not valid" in error_message:
+                    return Response(
+                        {"error": "Invalid or unauthorized API key provided."},
+                        status=status.HTTP_401_UNAUTHORIZED,
+                    )
+                if "RESOURCE_EXHAUSTED" in error_message or "quota" in error_message.lower():
+                    logger.warning(f"[PRIME_GEMINI] {model_name} quota exceeded, trying next model...")
+                    break
+                return Response(
+                    {"error": f"Client error with {model_name}: {error_message}"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            except ServerError as e:
+                if "UNAVAILABLE" in str(e):
+                    logger.warning(f"[PRIME_GEMINI] {model_name} unavailable, retrying...")
+                    time.sleep(delay * (2 ** attempt))
+                    continue
+                logger.error(f"[PRIME_GEMINI] ServerError: {e}", exc_info=True)
+                return Response(
+                    {"error": f"Server error: {str(e)}"},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
+
+            except Exception as e:
+                logger.error(f"[PRIME_GEMINI] Unexpected error: {e}", exc_info=True)
+                return Response(
+                    {"error": f"Unexpected error: {str(e)}"},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
+
+    logger.error("[PRIME_GEMINI] FAILURE: All models exhausted")
+    logger.info("=" * 80)
+    return Response(
+        {"error": "All Gemini models are currently unavailable or quota exceeded."},
+        status=status.HTTP_503_SERVICE_UNAVAILABLE,
+    )
+
+
+############################################
+# Gemini query endpoint WITH CSV prepended
+############################################
+@csrf_exempt
+@api_view(["POST"])
+def ask_gemini_with_data(request, max_retries=2, delay=2):
+    """
+    Same as ask_gemini but prepends the full linker CSV to every prompt
+    so Gemini has the reference data available for every question.
+    """
+    logger.info("=" * 80)
+    logger.info("[ASK_GEMINI_WITH_DATA] ========== NEW REQUEST ==========")
+
+    # --- Load the CSV ---
+    try:
+        csv_content = load_linker_csv()
+    except FileNotFoundError as e:
+        logger.error(f"[ASK_GEMINI_WITH_DATA] CSV missing: {e}")
+        return Response(
+            {"error": str(e), "csv_missing": True},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+    except ValueError as e:
+        logger.error(f"[ASK_GEMINI_WITH_DATA] CSV invalid: {e}")
+        return Response(
+            {"error": str(e), "csv_missing": True},
+            status=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        )
+
+    # --- Authenticate ---
+    token = request.COOKIES.get("gemini_token")
+    if not token:
+        return Response(
+            {"error": "Missing gemini_token cookie."},
+            status=status.HTTP_401_UNAUTHORIZED,
+        )
+    api_key = cache.get(token)
+    if not api_key:
+        return Response(
+            {"error": "Invalid or expired token."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    # --- Build prompt with prepended CSV ---
+    prompt = request.data.get("prompt")
+    if not prompt:
+        return Response(
+            {"error": "Prompt is missing in request."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    full_prompt = (
+        "You are a chemistry assistant specialising in MOFs and COFs. "
+        "Use the following linker reference data to answer the user's question.\n\n"
+        f"{csv_content}\n\n"
+        f"USER QUESTION: {prompt}"
+    )
+
+    logger.info(f"[ASK_GEMINI_WITH_DATA] Full prompt length: {len(full_prompt)} chars")
+
+    model_names = [
+        "gemini-3-pro-preview",
+        "gemini-3-flash-preview",
+        "gemini-2.5-flash",
+        "gemini-2.5-flash-lite",
+        "gemini-2.5-pro",
+    ]
+
+    try:
+        client = genai.Client(api_key=api_key)
+    except Exception as e:
+        logger.error(f"[ASK_GEMINI_WITH_DATA] Failed to create Gemini client: {e}", exc_info=True)
+        return Response(
+            {"error": f"Failed to create Gemini client: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+    for model_name in model_names:
+        for attempt in range(max_retries):
+            try:
+                logger.info(f"[ASK_GEMINI_WITH_DATA] Trying model: {model_name} (Attempt {attempt + 1}/{max_retries})")
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=full_prompt,
+                )
+                response_text = response.text if response.text is not None else ""
+                logger.info(f"[ASK_GEMINI_WITH_DATA] SUCCESS with {model_name}. Response length: {len(response_text)}")
+                logger.info("=" * 80)
+                return Response(
+                    {"response": response_text},
+                    status=status.HTTP_200_OK,
+                )
+
+            except ClientError as e:
+                error_message = str(e)
+                logger.error(f"[ASK_GEMINI_WITH_DATA] ClientError with {model_name}: {error_message}")
+                if "API_KEY_INVALID" in error_message or "API key not valid" in error_message:
+                    return Response(
+                        {"error": "Invalid or unauthorized API key provided."},
+                        status=status.HTTP_401_UNAUTHORIZED,
+                    )
+                if "RESOURCE_EXHAUSTED" in error_message or "quota" in error_message.lower():
+                    logger.warning(f"[ASK_GEMINI_WITH_DATA] {model_name} quota exceeded, trying next model...")
+                    break
+                return Response(
+                    {"error": f"Client error with {model_name}: {error_message}"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            except ServerError as e:
+                if "UNAVAILABLE" in str(e):
+                    logger.warning(f"[ASK_GEMINI_WITH_DATA] {model_name} unavailable, retrying...")
+                    time.sleep(delay * (2 ** attempt))
+                    continue
+                logger.error(f"[ASK_GEMINI_WITH_DATA] ServerError: {e}", exc_info=True)
+                return Response(
+                    {"error": f"Server error: {str(e)}"},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
+
+            except Exception as e:
+                logger.error(f"[ASK_GEMINI_WITH_DATA] Unexpected error: {e}", exc_info=True)
+                return Response(
+                    {"error": f"Unexpected error: {str(e)}"},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
+
+    logger.error("[ASK_GEMINI_WITH_DATA] FAILURE: All models exhausted")
+    logger.info("=" * 80)
+    return Response(
+        {"error": "All Gemini models are currently unavailable or quota exceeded."},
+        status=status.HTTP_503_SERVICE_UNAVAILABLE,
+    )
 
 ############################################
 # Clear token + cookie

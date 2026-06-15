@@ -20,7 +20,7 @@ if (-not $PYTHON_V) {
     exit 1
 }
 foreach ($version in $PYTHON_V) {
-    if($version -notmatch " -V:3.14"){
+    if($version -notmatch " -V:3.14" -and $version -notmatch " -V:3.13t"){
         $PYTHON_CMD = $version -replace '.*([a-zA-Z]:\\[^ ]+).*', '$1'
         Write-Host "Python 3.13 detected: $PYTHON_CMD" -ForegroundColor Green
         break

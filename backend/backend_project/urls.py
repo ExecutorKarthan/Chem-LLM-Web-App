@@ -18,6 +18,8 @@ urlpatterns = [
     path("api/test-key/", api_views.test_api_key),
     path("api/csrf/", api_views.get_csrf_token),
     path("api/ask/", api_views.ask_gemini),
+    path("api/prime/", api_views.prime_gemini),
+    path("api/ask-with-data/", api_views.ask_gemini_with_data),
     path("api/clear-token/", api_views.clear_token),
 
     # Explicitly serve assets from React build
