@@ -5,9 +5,9 @@ import LLMEntryBox from "./LLMEntryBox.js";
 import LLMResponseBox from "./LLMResponseBox.js";
 import { Row, Col } from "antd";
 import { BACKEND_URL } from "../config.js";
-import SmilesInput from "./SmilesInput";
-import MoleculeViewer from "./MoleculeViewer";
- 
+import SmilesInput from "./SMILESInput.js";
+import MoleculeViewer from "./MoleculeViewer.js";
+
 // Helper function to get CSRF token from cookies
 function getCookie(name: string): string | undefined {
   const value = `; ${document.cookie}`;
@@ -20,15 +20,15 @@ function getCookie(name: string): string | undefined {
   }
   return undefined;
 }
- 
+
 // Define Chem app
 const ChemApp = () => {
   const [userQuery, updateQuery] = useState<string>("");
   const [response, setResponse] = useState<string>("");
   const [error, setError] = useState<string>("");
   const [loading, setLoading] = useState<boolean>(false);
-  const [submittedSmiles, setSubmittedSmiles] = useState<string>("");
- 
+  const [submittedSmiles, setSubmittedSmiles] = useState<string[]>([]);
+
   // ─── Shared pre-flight setup ───────────────────────────────────────────────
   const beginRequest = () => {
     setLoading(true);
@@ -36,12 +36,11 @@ const ChemApp = () => {
     setError("");
     return getCookie("csrftoken") || "";
   };
- 
+
   const handleError = (err: any) => {
     console.error("Full error object:", err);
     console.error("Error response:", err?.response);
- 
-    // Special handling when the CSV file is missing on the server
+
     if (err?.response?.data?.csv_missing) {
       const msg =
         "⚠️ Data submission failed: the linker data file could not be found on the " +
@@ -51,18 +50,18 @@ const ChemApp = () => {
       setResponse(msg);
       return;
     }
- 
+
     const backendError =
       err?.response?.data?.error || "Unexpected error occurred.";
     setError(backendError);
     setResponse(backendError);
   };
- 
+
   // ─── Button 1: plain submit – no CSV ──────────────────────────────────────
   const onSubmit = async () => {
     if (!userQuery.trim()) return;
     const csrfToken = beginRequest();
- 
+
     try {
       const res = await axios.post(
         `${BACKEND_URL}/api/ask/`,
@@ -76,11 +75,11 @@ const ChemApp = () => {
       setLoading(false);
     }
   };
- 
-  // ─── Button 2: prime Gemini with CSV only (no user query needed) ───────────
+
+  // ─── Button 2: prime Gemini with CSV only ─────────────────────────────────
   const onSubmitData = async () => {
     const csrfToken = beginRequest();
- 
+
     try {
       const res = await axios.post(
         `${BACKEND_URL}/api/prime/`,
@@ -94,12 +93,12 @@ const ChemApp = () => {
       setLoading(false);
     }
   };
- 
+
   // ─── Button 3: submit query WITH CSV prepended every time ─────────────────
   const onSubmitWithData = async () => {
     if (!userQuery.trim()) return;
     const csrfToken = beginRequest();
- 
+
     try {
       const res = await axios.post(
         `${BACKEND_URL}/api/ask-with-data/`,
@@ -113,29 +112,27 @@ const ChemApp = () => {
       setLoading(false);
     }
   };
- 
-  // Return HTML code for rendering
+
+  // Column style shared between both rows
+  const colStyle = (extra?: React.CSSProperties): React.CSSProperties => ({
+    border: "1px solid #ddd",
+    borderRadius: 6,
+    padding: 16,
+    boxSizing: "border-box",
+    ...extra,
+  });
+
   return (
     <>
-      {/* LLM input/output */}
-      <Row gutter={[24, 24]} justify="center" wrap style={{ marginBottom: 32 }}>
-        <Col
-          xs={24}
-          sm={24}
-          md={12}
-          lg={12}
-          xl={12}
-          style={{
-            border: "1px solid #ddd",
-            padding: 16,
-            borderRadius: 6,
-            boxSizing: "border-box",
-            display: "flex",
-            flexDirection: "column",
-            justifyContent: "space-between",
-            minHeight: 350,
-          }}
-        >
+      {/*
+        Mobile stacking order (xs/sm): LLMEntry → LLMResponse → SMILESInput → MoleculeViewer
+        Each Col is full-width on mobile (xs=24), half-width on md+ (md=12).
+        Both Rows share wrap so they reflow naturally.
+      */}
+
+      {/* ── Row 1: LLM Entry | LLM Response ── */}
+      <Row gutter={[16, 16]} justify="center" wrap style={{ marginBottom: 16 }}>
+        <Col xs={24} md={12} style={colStyle({ minHeight: 350, display: "flex", flexDirection: "column" })}>
           <LLMEntryBox
             query={userQuery}
             onQueryChange={updateQuery}
@@ -148,21 +145,7 @@ const ChemApp = () => {
             onSubmitWithData={onSubmitWithData}
           />
         </Col>
-        <Col
-          xs={24}
-          sm={24}
-          md={12}
-          lg={12}
-          xl={12}
-          style={{
-            border: "1px solid #ddd",
-            padding: 16,
-            borderRadius: 6,
-            boxSizing: "border-box",
-            minHeight: 350,
-            overflowY: "auto",
-          }}
-        >
+        <Col xs={24} md={12} style={colStyle({ minHeight: 350, overflowY: "auto" })}>
           <LLMResponseBox
             response={response}
             loading={loading}
@@ -171,39 +154,20 @@ const ChemApp = () => {
           />
         </Col>
       </Row>
-      {/* Editor, puzzle image, and Skulpt display */}
-      <Row gutter={[24, 24]} justify="center" wrap>
-        <Col
-          xs={24}
-          sm={24}
-          md={12}
-          lg={12}
-          xl={12}
-          style={{
-            border: "1px solid #ddd",
-            borderRadius: 6,
-            padding: 12,
-            boxSizing: "border-box",
-            minHeight: 350,
-            display: "flex",
-            flexDirection: "column",
-          }}
-        >
+
+      {/* ── Row 2: SMILES Input | Molecule Viewer ── */}
+      <Row gutter={[16, 16]} justify="center" wrap>
+        <Col xs={24} md={12} style={colStyle({ minHeight: 350, display: "flex", flexDirection: "column" })}>
           <SmilesInput onSubmitSmiles={setSubmittedSmiles} />
         </Col>
         <Col
           xs={24}
-          sm={24}
           md={12}
-          lg={12}
-          xl={12}
-          style={{
-            border: "1px solid #ddd",
-            borderRadius: 6,
-            padding: 12,
-            boxSizing: "border-box",
-            minHeight: 350,
-          }}
+          style={colStyle({
+            // Let the viewer grow to fit all molecule panels —
+            // no maxHeight so tall molecules are never clipped.
+            overflowY: "auto",
+          })}
         >
           <MoleculeViewer smiles={submittedSmiles} />
         </Col>
@@ -211,7 +175,6 @@ const ChemApp = () => {
     </>
   );
 };
- 
+
 // Export component for use
 export default ChemApp;
- 

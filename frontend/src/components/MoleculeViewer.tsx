@@ -5,14 +5,14 @@ import React, {
   useState,
 } from "react";
 import initRDKitModule from "@rdkit/rdkit";
- 
+
 interface MoleculeViewerProps {
-  smiles: string;
+  smiles: string[];
 }
- 
+
 // ─── RDKit singleton ──────────────────────────────────────────────────────────
 let rdkitPromise: Promise<any> | null = null;
- 
+
 const getRDKit = () => {
   if (!rdkitPromise) {
     rdkitPromise = initRDKitModule({
@@ -21,86 +21,83 @@ const getRDKit = () => {
   }
   return rdkitPromise;
 };
- 
-// ─── Component ────────────────────────────────────────────────────────────────
-const MoleculeViewer: React.FC<MoleculeViewerProps> = ({ smiles }) => {
-  // outerRef is the stable, fixed-size box we observe.
-  // It uses position:relative + explicit height so the SVG inside
-  // (which is position:absolute) can NEVER push it larger — breaking
-  // the ResizeObserver → re-render → bigger SVG → ResizeObserver loop.
+
+// ─── Single molecule panel ────────────────────────────────────────────────────
+interface MoleculePanelProps {
+  smiles: string;
+  label: string;
+}
+
+const MoleculePanel: React.FC<MoleculePanelProps> = ({ smiles, label }) => {
   const outerRef = useRef<HTMLDivElement>(null);
   const svgContainerRef = useRef<HTMLDivElement>(null);
   const rafRef = useRef<number | null>(null);
- 
+
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
- 
-  // ── Observe the OUTER wrapper only ────────────────────────────────────────
-  // Because the SVG sits inside an absolutely-positioned child, it cannot
-  // affect outerRef's size, so this observer never fires in a loop.
+  // Width-only: we let height be determined by the SVG aspect ratio
+  const [width, setWidth] = useState(0);
+
+  // Observe container width only — height is derived, never fed back in
   useLayoutEffect(() => {
     if (!outerRef.current) return;
- 
+
     const observer = new ResizeObserver((entries) => {
-      const { width, height } = entries[0].contentRect;
-      const w = Math.floor(width);
-      const h = Math.floor(height);
- 
-      setDimensions((prev) => {
-        if (Math.abs(prev.width - w) < 2 && Math.abs(prev.height - h) < 2) {
-          return prev;
-        }
-        return { width: w, height: h };
-      });
+      const w = Math.floor(entries[0].contentRect.width);
+      setWidth((prev) => (Math.abs(prev - w) < 2 ? prev : w));
     });
- 
+
     observer.observe(outerRef.current);
     return () => observer.disconnect();
   }, []);
- 
-  // ── Render molecule ────────────────────────────────────────────────────────
+
   useEffect(() => {
     if (!svgContainerRef.current) return;
-    if (dimensions.width < 10 || dimensions.height < 10) return;
- 
+    if (width < 10) return;
+
+    // Height is 60% of width — tall enough to hold any molecule,
+    // never wider than the container, and scales with screen size.
+    const height = Math.round(width * 0.2);
+
     const renderMolecule = async (): Promise<void> => {
       if (!svgContainerRef.current) return;
- 
+
       if (!smiles.trim()) {
         svgContainerRef.current.innerHTML = "";
         setError("");
         setLoading(false);
         return;
       }
- 
+
       setLoading(true);
       setError("");
- 
+
       try {
         const RDKit = await getRDKit();
- 
+
         if (rafRef.current) cancelAnimationFrame(rafRef.current);
- 
+
         rafRef.current = requestAnimationFrame(() => {
           let mol: any = null;
           try {
             mol = RDKit.get_mol(smiles);
- 
+
             if (!mol || !mol.is_valid()) {
               svgContainerRef.current!.innerHTML = "";
               setError("Invalid SMILES string — please check your input.");
               return;
             }
- 
+
             const svg = mol.get_svg_with_highlights(
-              JSON.stringify({
-                width: dimensions.width,
-                height: dimensions.height,
-              })
+              JSON.stringify({ width, height })
             );
- 
-            svgContainerRef.current!.innerHTML = svg;
+
+            // Make SVG fully fluid so it never overflows narrow screens
+            const patched = svg
+              .replace(/width="\d+"/, `width="100%"`)
+              .replace(/height="\d+"/, `height="${height}"`);
+
+            svgContainerRef.current!.innerHTML = patched;
             setError("");
           } catch (err) {
             console.error("RDKit rendering error:", err);
@@ -116,65 +113,84 @@ const MoleculeViewer: React.FC<MoleculeViewerProps> = ({ smiles }) => {
         if (svgContainerRef.current) svgContainerRef.current.innerHTML = "";
         setError(
           "Failed to initialize the chemistry renderer. " +
-          "Please ensure RDKit_minimal.wasm is present in the public/ folder."
+          "Please ensure RDKit_minimal.wasm is present in dist/."
         );
         setLoading(false);
       }
     };
- 
+
     void renderMolecule();
- 
+
     return () => {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
     };
-  }, [smiles, dimensions.width, dimensions.height]);
- 
+  }, [smiles, width]);
+
   return (
-    <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column" }}>
-      <h3 style={{ margin: "0 0 8px 0" }}>Molecule Viewer</h3>
- 
-      {/* Status messages — outside the observed box so they don't affect its size */}
-      {loading && (
-        <div style={{ color: "#555", marginBottom: 8 }}>Loading molecule...</div>
-      )}
-      {error && (
-        <div style={{ color: "red", marginBottom: 8 }}>{error}</div>
-      )}
-      {!smiles && !loading && !error && (
-        <div style={{ color: "#666", marginBottom: 8 }}>
-          Enter a SMILES string and click Render.
-        </div>
-      )}
- 
-      {/* Stable outer box — position:relative + maxHeight so the
-          absolutely-positioned SVG child can never make it grow */}
+    <div
+      style={{
+        width: "100%",
+        borderBottom: "1px solid #eee",
+        paddingBottom: 12,
+        marginBottom: 12,
+      }}
+    >
+      {/* Label */}
+      <div style={{ fontSize: 12, fontWeight: 600, color: "#555", marginBottom: 4 }}>
+        {label}
+      </div>
+
+      {/* SMILES string display */}
       <div
-        ref={outerRef}
         style={{
-          position: "relative",
-          flex: 1,
-          width: "100%",
-          minHeight: 300,
-          maxHeight: 400,
-          overflow: "hidden",
+          fontFamily: "monospace",
+          fontSize: 11,
+          color: "#888",
+          marginBottom: 6,
+          wordBreak: "break-all",
         }}
       >
-        {/* SVG lives here — position:absolute means it fills the parent
-            without contributing to its layout size */}
-        <div
-          ref={svgContainerRef}
-          style={{
-            position: "absolute",
-            top: 0,
-            left: 0,
-            width: "100%",
-            height: "100%",
-          }}
-        />
+        {smiles}
+      </div>
+
+      {loading && <div style={{ color: "#555", fontSize: 13 }}>Rendering...</div>}
+      {error && <div style={{ color: "red", fontSize: 13 }}>{error}</div>}
+
+      {/* outerRef measures available width; svgContainer holds the SVG.
+          No position:absolute needed here because height is explicitly
+          set on the SVG itself — it cannot feed back into the observer. */}
+      <div ref={outerRef} style={{ width: "100%", overflow: "hidden" }}>
+        <div ref={svgContainerRef} style={{ width: "100%", lineHeight: 0 }} />
       </div>
     </div>
   );
 };
- 
+
+// ─── Main viewer — renders one panel per SMILES entry ────────────────────────
+const MoleculeViewer: React.FC<MoleculeViewerProps> = ({ smiles }) => {
+  if (!smiles || smiles.length === 0) {
+    return (
+      <div style={{ width: "100%" }}>
+        <h3 style={{ margin: "0 0 8px 0" }}>Molecule Viewer</h3>
+        <div style={{ color: "#666", fontSize: 13 }}>
+          Enter a SMILES string and click Render.
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ width: "100%" }}>
+      <h3 style={{ margin: "0 0 12px 0" }}>Molecule Viewer</h3>
+      {smiles.map((s, i) => (
+        <MoleculePanel
+          key={`${i}-${s}`}
+          smiles={s}
+          label={`Molecule ${i + 1}`}
+        />
+      ))}
+    </div>
+  );
+};
+
 export default MoleculeViewer;
- 
