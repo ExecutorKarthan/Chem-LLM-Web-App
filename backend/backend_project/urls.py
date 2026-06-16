@@ -7,10 +7,14 @@ from django.views.static import serve
 from backend_project.views import frontend
 from api import views as api_views
 
+# Root of the React dist folder — used for top-level static files
+# like RDKit_minimal.wasm that sit outside the /assets/ prefix.
+DIST_ROOT = settings.BASE_DIR.parent / "frontend" / "dist"
+
 urlpatterns = [
     path("admin/", admin.site.urls),
 
-    # API endpoints
+    # ── API endpoints ──────────────────────────────────────────────────────
     path("api/puzzles/", api_views.get_puzzles),
     path("api/check-cookie/", api_views.check_cookie),
     path("api/tokenize-key/", api_views.tokenize_key),
@@ -22,14 +26,26 @@ urlpatterns = [
     path("api/ask-with-data/", api_views.ask_gemini_with_data),
     path("api/clear-token/", api_views.clear_token),
 
-    # Explicitly serve assets from React build
-    re_path(r'^assets/(?P<path>.*)$', serve, {
-        'document_root': settings.BASE_DIR.parent / 'frontend' / 'dist' / 'assets',
-    }),
+    # ── RDKit WASM — must be explicit BEFORE the SPA catchall ─────────────
+    # The catchall regex below would intercept /RDKit_minimal.wasm and return
+    # index.html, which causes the "expected magic word 00 61 73 6d, found
+    # 3c 21 2d 2d" error (Django is returning HTML instead of binary WASM).
+    path(
+        "RDKit_minimal.wasm",
+        serve,
+        {"document_root": DIST_ROOT, "path": "RDKit_minimal.wasm"},
+    ),
 
-    # Root route -> React
+    # ── React build assets (/assets/...) ───────────────────────────────────
+    re_path(
+        r"^assets/(?P<path>.*)$",
+        serve,
+        {"document_root": DIST_ROOT / "assets"},
+    ),
+
+    # ── Root route → React ─────────────────────────────────────────────────
     path("", frontend, name="frontend_root"),
 
-    # SPA fallback: anything not /api, /admin, or /assets
+    # ── SPA fallback — anything not matched above → React index.html ───────
     re_path(r"^(?!api/|admin/|assets/).*$", frontend, name="frontend_catchall"),
 ]

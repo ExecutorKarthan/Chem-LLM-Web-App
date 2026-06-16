@@ -5,6 +5,8 @@ import LLMEntryBox from "./LLMEntryBox.js";
 import LLMResponseBox from "./LLMResponseBox.js";
 import { Row, Col } from "antd";
 import { BACKEND_URL } from "../config.js";
+import SmilesInput from "./SmilesInput";
+import MoleculeViewer from "./MoleculeViewer";
  
 // Helper function to get CSRF token from cookies
 function getCookie(name: string): string | undefined {
@@ -25,6 +27,7 @@ const ChemApp = () => {
   const [response, setResponse] = useState<string>("");
   const [error, setError] = useState<string>("");
   const [loading, setLoading] = useState<boolean>(false);
+  const [submittedSmiles, setSubmittedSmiles] = useState<string>("");
  
   // ─── Shared pre-flight setup ───────────────────────────────────────────────
   const beginRequest = () => {
@@ -186,7 +189,7 @@ const ChemApp = () => {
             flexDirection: "column",
           }}
         >
-          **INSERT RDKIT INPUT HERE**
+          <SmilesInput onSubmitSmiles={setSubmittedSmiles} />
         </Col>
         <Col
           xs={24}
@@ -202,7 +205,7 @@ const ChemApp = () => {
             minHeight: 350,
           }}
         >
-          **INSERT RDKIT.JS**
+          <MoleculeViewer smiles={submittedSmiles} />
         </Col>
       </Row>
     </>

@@ -130,6 +130,33 @@ if (-Not (Test-Path "node_modules")) {
     Write-Host "  Node modules already installed, skipping..." -ForegroundColor Gray
 }
 
+# Build the React frontend — this creates dist/ and (via vite.config.ts
+# closeBundle plugin) also copies the WASM on subsequent builds.
+# We do an explicit copy here too so the initial deploy is fully hands-free.
+Write-Host "  Building React frontend..." -ForegroundColor Gray
+npm run build
+
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "ERROR: Frontend build failed." -ForegroundColor Red
+    pause
+    exit 1
+}
+
+# Copy RDKit WASM into dist root so Django can serve it at /RDKit_minimal.wasm.
+# Without this the SPA catchall in urls.py intercepts the request and returns
+# index.html, causing the WebAssembly "expected magic word" error.
+Write-Host "  Copying RDKit WASM to dist/..." -ForegroundColor Gray
+$wasmSrc  = "node_modules\@rdkit\rdkit\dist\RDKit_minimal.wasm"
+$wasmDest = "dist\RDKit_minimal.wasm"
+
+if (Test-Path $wasmSrc) {
+    Copy-Item $wasmSrc -Destination $wasmDest -Force
+    Write-Host "  RDKit_minimal.wasm copied successfully." -ForegroundColor Green
+} else {
+    Write-Host "WARNING: RDKit WASM not found at $wasmSrc" -ForegroundColor Yellow
+    Write-Host "         Molecule viewer will not work until this is resolved." -ForegroundColor Yellow
+}
+
 Write-Host "  Frontend setup complete!" -ForegroundColor Green
 Write-Host ""
 
