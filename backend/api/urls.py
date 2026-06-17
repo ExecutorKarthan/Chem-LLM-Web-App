@@ -8,7 +8,6 @@ urlpatterns = [
     path("admin/", admin.site.urls),
 
     # API endpoints
-    path("api/puzzles/", api_views.get_puzzles),
     path("api/check-cookie/", api_views.check_cookie),
     path("api/tokenize/", api_views.tokenize_key),
     path("api/ask/", api_views.ask_gemini),

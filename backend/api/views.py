@@ -36,40 +36,6 @@ def get_csrf_token(request):
     response = JsonResponse({'csrfToken': token})
     return response
 
-
-############################################
-# Puzzle loader
-############################################
-def get_puzzles(request):
-    code_dir = settings.BASE_DIR / "assets" / "puzzles"
-    static_files_root = settings.BASE_DIR / "assets" / "static"
-
-    puzzles = []
-
-    for filename in os.listdir(code_dir):
-        if not filename.endswith(".txt"):
-            continue
-
-        puzzle_id = os.path.splitext(filename)[0]
-        code_path = code_dir / filename
-        code = code_path.read_text()
-
-        image_filename = f"{puzzle_id}.png"
-        image_file_path = os.path.join(static_files_root, image_filename)
-
-        if not os.path.exists(image_file_path):
-            continue
-
-        puzzles.append({
-            "id": puzzle_id,
-            "title": f"Puzzle {puzzle_id.replace('puzzle', '')}",
-            "code": code,
-            "image_url": f"{settings.STATIC_URL}{image_filename}",
-        })
-
-    return JsonResponse(puzzles, safe=False)
-
-
 ############################################
 # Cookie existence check
 ############################################
