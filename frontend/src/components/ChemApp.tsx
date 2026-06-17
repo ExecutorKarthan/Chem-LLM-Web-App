@@ -21,15 +21,14 @@ function getCookie(name: string): string | undefined {
   return undefined;
 }
 
-// Define Chem app
 const ChemApp = () => {
   const [userQuery, updateQuery] = useState<string>("");
   const [response, setResponse] = useState<string>("");
   const [error, setError] = useState<string>("");
   const [loading, setLoading] = useState<boolean>(false);
   const [submittedSmiles, setSubmittedSmiles] = useState<string[]>([]);
+  const [submittedSubstructure, setSubmittedSubstructure] = useState<string>("");
 
-  // ─── Shared pre-flight setup ───────────────────────────────────────────────
   const beginRequest = () => {
     setLoading(true);
     setResponse("");
@@ -57,11 +56,9 @@ const ChemApp = () => {
     setResponse(backendError);
   };
 
-  // ─── Button 1: plain submit – no CSV ──────────────────────────────────────
   const onSubmit = async () => {
     if (!userQuery.trim()) return;
     const csrfToken = beginRequest();
-
     try {
       const res = await axios.post(
         `${BACKEND_URL}/api/ask/`,
@@ -76,10 +73,8 @@ const ChemApp = () => {
     }
   };
 
-  // ─── Button 2: prime Gemini with CSV only ─────────────────────────────────
   const onSubmitData = async () => {
     const csrfToken = beginRequest();
-
     try {
       const res = await axios.post(
         `${BACKEND_URL}/api/prime/`,
@@ -94,11 +89,9 @@ const ChemApp = () => {
     }
   };
 
-  // ─── Button 3: submit query WITH CSV prepended every time ─────────────────
   const onSubmitWithData = async () => {
     if (!userQuery.trim()) return;
     const csrfToken = beginRequest();
-
     try {
       const res = await axios.post(
         `${BACKEND_URL}/api/ask-with-data/`,
@@ -113,7 +106,12 @@ const ChemApp = () => {
     }
   };
 
-  // Column style shared between both rows
+  // Receives both the molecule list and the substructure query from SmilesInput
+  const handleSubmitSmiles = (smilesList: string[], substructure: string) => {
+    setSubmittedSmiles(smilesList);
+    setSubmittedSubstructure(substructure);
+  };
+
   const colStyle = (extra?: React.CSSProperties): React.CSSProperties => ({
     border: "1px solid #ddd",
     borderRadius: 6,
@@ -124,15 +122,13 @@ const ChemApp = () => {
 
   return (
     <>
-      {/*
-        Mobile stacking order (xs/sm): LLMEntry → LLMResponse → SMILESInput → MoleculeViewer
-        Each Col is full-width on mobile (xs=24), half-width on md+ (md=12).
-        Both Rows share wrap so they reflow naturally.
-      */}
-
       {/* ── Row 1: LLM Entry | LLM Response ── */}
       <Row gutter={[16, 16]} justify="center" wrap style={{ marginBottom: 16 }}>
-        <Col xs={24} md={12} style={colStyle({ minHeight: 350, display: "flex", flexDirection: "column" })}>
+        <Col
+          xs={24}
+          md={12}
+          style={colStyle({ minHeight: 350, display: "flex", flexDirection: "column" })}
+        >
           <LLMEntryBox
             query={userQuery}
             onQueryChange={updateQuery}
@@ -157,24 +153,22 @@ const ChemApp = () => {
 
       {/* ── Row 2: SMILES Input | Molecule Viewer ── */}
       <Row gutter={[16, 16]} justify="center" wrap>
-        <Col xs={24} md={12} style={colStyle({ minHeight: 350, display: "flex", flexDirection: "column" })}>
-          <SmilesInput onSubmitSmiles={setSubmittedSmiles} />
-        </Col>
         <Col
           xs={24}
           md={12}
-          style={colStyle({
-            // Let the viewer grow to fit all molecule panels —
-            // no maxHeight so tall molecules are never clipped.
-            overflowY: "auto",
-          })}
+          style={colStyle({ minHeight: 350, display: "flex", flexDirection: "column" })}
         >
-          <MoleculeViewer smiles={submittedSmiles} />
+          <SmilesInput onSubmitSmiles={handleSubmitSmiles} />
+        </Col>
+        <Col xs={24} md={12} style={colStyle({ overflowY: "auto" })}>
+          <MoleculeViewer
+            smiles={submittedSmiles}
+            substructure={submittedSubstructure}
+          />
         </Col>
       </Row>
     </>
   );
 };
 
-// Export component for use
 export default ChemApp;

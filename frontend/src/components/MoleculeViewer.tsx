@@ -8,6 +8,7 @@ import initRDKitModule from "@rdkit/rdkit";
 
 interface MoleculeViewerProps {
   smiles: string[];
+  substructure: string;
 }
 
 // ─── RDKit singleton ──────────────────────────────────────────────────────────
@@ -26,27 +27,26 @@ const getRDKit = () => {
 interface MoleculePanelProps {
   smiles: string;
   label: string;
+  substructure: string;
 }
 
-const MoleculePanel: React.FC<MoleculePanelProps> = ({ smiles, label }) => {
+const MoleculePanel: React.FC<MoleculePanelProps> = ({ smiles, label, substructure }) => {
   const outerRef = useRef<HTMLDivElement>(null);
   const svgContainerRef = useRef<HTMLDivElement>(null);
   const rafRef = useRef<number | null>(null);
 
   const [error, setError] = useState("");
+  const [matchNote, setMatchNote] = useState("");
   const [loading, setLoading] = useState(false);
-  // Width-only: we let height be determined by the SVG aspect ratio
   const [width, setWidth] = useState(0);
 
-  // Observe container width only — height is derived, never fed back in
+  // Observe width only — height is derived so it can never feed back
   useLayoutEffect(() => {
     if (!outerRef.current) return;
-
     const observer = new ResizeObserver((entries) => {
       const w = Math.floor(entries[0].contentRect.width);
       setWidth((prev) => (Math.abs(prev - w) < 2 ? prev : w));
     });
-
     observer.observe(outerRef.current);
     return () => observer.disconnect();
   }, []);
@@ -55,9 +55,7 @@ const MoleculePanel: React.FC<MoleculePanelProps> = ({ smiles, label }) => {
     if (!svgContainerRef.current) return;
     if (width < 10) return;
 
-    // Height is 60% of width — tall enough to hold any molecule,
-    // never wider than the container, and scales with screen size.
-    const height = Math.round(width * 0.2);
+    const height = Math.round(width * 0.3);
 
     const renderMolecule = async (): Promise<void> => {
       if (!svgContainerRef.current) return;
@@ -65,20 +63,23 @@ const MoleculePanel: React.FC<MoleculePanelProps> = ({ smiles, label }) => {
       if (!smiles.trim()) {
         svgContainerRef.current.innerHTML = "";
         setError("");
+        setMatchNote("");
         setLoading(false);
         return;
       }
 
       setLoading(true);
       setError("");
+      setMatchNote("");
 
       try {
         const RDKit = await getRDKit();
-
         if (rafRef.current) cancelAnimationFrame(rafRef.current);
 
         rafRef.current = requestAnimationFrame(() => {
           let mol: any = null;
+          let qmol: any = null;
+
           try {
             mol = RDKit.get_mol(smiles);
 
@@ -88,11 +89,41 @@ const MoleculePanel: React.FC<MoleculePanelProps> = ({ smiles, label }) => {
               return;
             }
 
-            const svg = mol.get_svg_with_highlights(
-              JSON.stringify({ width, height })
-            );
+            // Build highlight details — substructure match if provided,
+            // otherwise plain size options
+            let mdetails: Record<string, any> = { width, height };
 
-            // Make SVG fully fluid so it never overflows narrow screens
+            if (substructure.trim()) {
+              try {
+                qmol = RDKit.get_qmol(substructure.trim());
+
+                if (qmol && qmol.is_valid()) {
+                  const matchJson = mol.get_substruct_match(qmol);
+                  const match = JSON.parse(matchJson);
+
+                  // get_substruct_match returns {} when there is no match
+                  const hasMatch =
+                    match.atoms && match.atoms.length > 0;
+
+                  if (hasMatch) {
+                    // Merge match highlights with size
+                    mdetails = { ...match, width, height };
+                    setMatchNote("✓ Substructure match found");
+                  } else {
+                    setMatchNote("No substructure match");
+                  }
+                } else {
+                  setMatchNote("Invalid substructure query");
+                }
+              } catch (subErr) {
+                console.warn("Substructure search error:", subErr);
+                setMatchNote("Substructure search failed");
+              }
+            }
+
+            const svg = mol.get_svg_with_highlights(JSON.stringify(mdetails));
+
+            // Make width fluid so SVG never overflows narrow screens
             const patched = svg
               .replace(/width="\d+"/, `width="100%"`)
               .replace(/height="\d+"/, `height="${height}"`);
@@ -105,6 +136,7 @@ const MoleculePanel: React.FC<MoleculePanelProps> = ({ smiles, label }) => {
             setError("Failed to render molecule.");
           } finally {
             mol?.delete?.();
+            qmol?.delete?.();
             setLoading(false);
           }
         });
@@ -120,45 +152,60 @@ const MoleculePanel: React.FC<MoleculePanelProps> = ({ smiles, label }) => {
     };
 
     void renderMolecule();
-
     return () => {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
     };
-  }, [smiles, width]);
+  }, [smiles, substructure, width]);
 
   return (
     <div
       style={{
-        width: "100%",
-        borderBottom: "1px solid #eee",
-        paddingBottom: 12,
-        marginBottom: 12,
+        display: "flex",
+        flexDirection: "column",
+        border: "1px solid #eee",
+        borderRadius: 4,
+        padding: 8,
+        boxSizing: "border-box",
+        minWidth: 0,
       }}
     >
-      {/* Label */}
-      <div style={{ fontSize: 12, fontWeight: 600, color: "#555", marginBottom: 4 }}>
+      <div style={{ fontSize: 12, fontWeight: 600, color: "#555", marginBottom: 2 }}>
         {label}
       </div>
 
-      {/* SMILES string display */}
       <div
         style={{
           fontFamily: "monospace",
-          fontSize: 11,
-          color: "#888",
-          marginBottom: 6,
+          fontSize: 10,
+          color: "#aaa",
+          marginBottom: 4,
           wordBreak: "break-all",
+          lineHeight: 1.3,
         }}
       >
         {smiles}
       </div>
 
-      {loading && <div style={{ color: "#555", fontSize: 13 }}>Rendering...</div>}
-      {error && <div style={{ color: "red", fontSize: 13 }}>{error}</div>}
+      {loading && <div style={{ color: "#555", fontSize: 12 }}>Rendering...</div>}
+      {error && <div style={{ color: "red", fontSize: 12 }}>{error}</div>}
 
-      {/* outerRef measures available width; svgContainer holds the SVG.
-          No position:absolute needed here because height is explicitly
-          set on the SVG itself — it cannot feed back into the observer. */}
+      {/* Match note — green for hit, grey for no match, amber for invalid */}
+      {matchNote && (
+        <div
+          style={{
+            fontSize: 11,
+            marginBottom: 4,
+            color: matchNote.startsWith("✓")
+              ? "#389e0d"
+              : matchNote === "No substructure match"
+              ? "#888"
+              : "#d46b08",
+          }}
+        >
+          {matchNote}
+        </div>
+      )}
+
       <div ref={outerRef} style={{ width: "100%", overflow: "hidden" }}>
         <div ref={svgContainerRef} style={{ width: "100%", lineHeight: 0 }} />
       </div>
@@ -166,8 +213,8 @@ const MoleculePanel: React.FC<MoleculePanelProps> = ({ smiles, label }) => {
   );
 };
 
-// ─── Main viewer — renders one panel per SMILES entry ────────────────────────
-const MoleculeViewer: React.FC<MoleculeViewerProps> = ({ smiles }) => {
+// ─── Main viewer ──────────────────────────────────────────────────────────────
+const MoleculeViewer: React.FC<MoleculeViewerProps> = ({ smiles, substructure }) => {
   if (!smiles || smiles.length === 0) {
     return (
       <div style={{ width: "100%" }}>
@@ -182,13 +229,22 @@ const MoleculeViewer: React.FC<MoleculeViewerProps> = ({ smiles }) => {
   return (
     <div style={{ width: "100%" }}>
       <h3 style={{ margin: "0 0 12px 0" }}>Molecule Viewer</h3>
-      {smiles.map((s, i) => (
-        <MoleculePanel
-          key={`${i}-${s}`}
-          smiles={s}
-          label={`Molecule ${i + 1}`}
-        />
-      ))}
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: smiles.length === 1 ? "1fr" : "repeat(2, minmax(0, 1fr))",
+          gap: 12,
+        }}
+      >
+        {smiles.map((s, i) => (
+          <MoleculePanel
+            key={`${i}-${s}`}
+            smiles={s}
+            label={`Molecule ${i + 1}`}
+            substructure={substructure}
+          />
+        ))}
+      </div>
     </div>
   );
 };
