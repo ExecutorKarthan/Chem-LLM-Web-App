@@ -80,7 +80,7 @@ const LLMEntryBox: React.FC<LLMEntryProps> = ({
               onClick={onSubmitData}
               disabled={loading}
               style={{ padding: "8px 16px", minWidth: 160 }}
-              title="Send the linker dataset to Gemini so it can reference it in later answers."
+              title="Send the MOF dataset to Gemini so it can reference it in later answers."
             >
               {loading ? "Loading..." : "Submit data to LLM"}
             </button>
@@ -90,7 +90,7 @@ const LLMEntryBox: React.FC<LLMEntryProps> = ({
               onClick={onSubmitWithData}
               disabled={loading || !query.trim()}
               style={{ padding: "8px 16px", minWidth: 200 }}
-              title="Send your query AND the full linker dataset to Gemini together."
+              title="Send your query AND the full MOF dataset to Gemini together."
             >
               {loading ? "Loading..." : "Submit request with data"}
             </button>

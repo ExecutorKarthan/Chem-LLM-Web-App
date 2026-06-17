@@ -478,40 +478,40 @@ def ask_gemini(request, max_retries=2, delay=2):
     )
 
 ############################################
-# Helper: load linker CSV as formatted string
+# Helper: load MOF CSV as formatted string
 ############################################
-LINKER_CSV_PATH = os.path.join(settings.BASE_DIR, "assets", "linker_data.csv")
+MOF_CSV_PATH = os.path.join(settings.BASE_DIR, "assets", "MOF_data.csv")
 
-def load_linker_csv():
+def load_mof_csv():
     """
-    Reads the linker CSV from disk and returns a formatted string
+    Reads the MOF CSV from disk and returns a formatted string
     suitable for inline injection into a Gemini prompt.
     Raises FileNotFoundError if the CSV is missing.
     Raises ValueError if the CSV is empty or malformed.
     """
-    if not os.path.exists(LINKER_CSV_PATH):
-        logger.error(f"[LINKER_CSV] File not found at: {LINKER_CSV_PATH}")
+    if not os.path.exists(MOF_CSV_PATH):
+        logger.error(f"[MOF_CSV] File not found at: {MOF_CSV_PATH}")
         raise FileNotFoundError(
-            f"Linker data file not found at {LINKER_CSV_PATH}. "
-            "Please ensure linker_data.csv exists in backend/assets/."
+            f"MOF data file not found at {MOF_CSV_PATH}. "
+            "Please ensure MOF_data.csv exists in backend/assets/."
         )
 
     rows = []
-    with open(LINKER_CSV_PATH, newline="", encoding="utf-8") as f:
+    with open(MOF_CSV_PATH, newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         headers = reader.fieldnames
         if not headers:
-            raise ValueError("Linker CSV is empty or has no header row.")
+            raise ValueError("MOF CSV is empty or has no header row.")
         for row in reader:
             rows.append(row)
 
     if not rows:
-        raise ValueError("Linker CSV has headers but contains no data rows.")
+        raise ValueError("MOF CSV has headers but contains no data rows.")
 
-    logger.info(f"[LINKER_CSV] Loaded {len(rows)} rows with columns: {headers}")
+    logger.info(f"[MOF_CSV] Loaded {len(rows)} rows with columns: {headers}")
 
     # Format as a readable table for Gemini
-    lines = ["LINKER REFERENCE DATA (SMILES notation):"]
+    lines = ["MOF REFERENCE DATA (SMILES notation):"]
     lines.append(", ".join(headers))
     lines.append("-" * 80)
     for row in rows:
@@ -521,13 +521,13 @@ def load_linker_csv():
 
 
 ############################################
-# Prime Gemini with linker CSV data
+# Prime Gemini with MOF CSV data
 ############################################
 @csrf_exempt
 @api_view(["POST"])
 def prime_gemini(request, max_retries=2, delay=2):
     """
-    Sends the linker CSV data to Gemini as a standalone priming call.
+    Sends the MOF CSV data to Gemini as a standalone priming call.
     Returns Gemini's acknowledgment response, prefaced with a success message.
     """
     logger.info("=" * 80)
@@ -535,7 +535,7 @@ def prime_gemini(request, max_retries=2, delay=2):
 
     # --- Load the CSV ---
     try:
-        csv_content = load_linker_csv()
+        csv_content = load_mof_csv()
     except FileNotFoundError as e:
         logger.error(f"[PRIME_GEMINI] CSV missing: {e}")
         return Response(
@@ -567,7 +567,7 @@ def prime_gemini(request, max_retries=2, delay=2):
     priming_prompt = (
         "You are a chemistry assistant specialising in Metal-Organic Frameworks (MOFs) "
         "and Covalent Organic Frameworks (COFs). I am providing you with a reference "
-        "dataset of linker molecules in SMILES notation along with their framework "
+        "dataset of MOF molecules in SMILES notation along with their framework "
         "properties. Please acknowledge you have received this data and briefly summarise "
         "what it contains so I know you are ready to answer questions about it.\n\n"
         f"{csv_content}"
@@ -604,7 +604,7 @@ def prime_gemini(request, max_retries=2, delay=2):
                 logger.info(f"[PRIME_GEMINI] SUCCESS with {model_name}. Response length: {len(response_text)}")
                 logger.info("=" * 80)
 
-                success_prefix = "✅ Linker data was successfully submitted to Gemini.\n\n"
+                success_prefix = "✅ MOF data was successfully submitted to Gemini.\n\n"
                 return Response(
                     {"response": success_prefix + response_text},
                     status=status.HTTP_200_OK,
@@ -659,7 +659,7 @@ def prime_gemini(request, max_retries=2, delay=2):
 @api_view(["POST"])
 def ask_gemini_with_data(request, max_retries=2, delay=2):
     """
-    Same as ask_gemini but prepends the full linker CSV to every prompt
+    Same as ask_gemini but prepends the full MOF CSV to every prompt
     so Gemini has the reference data available for every question.
     """
     logger.info("=" * 80)
@@ -667,7 +667,7 @@ def ask_gemini_with_data(request, max_retries=2, delay=2):
 
     # --- Load the CSV ---
     try:
-        csv_content = load_linker_csv()
+        csv_content = load_mof_csv()
     except FileNotFoundError as e:
         logger.error(f"[ASK_GEMINI_WITH_DATA] CSV missing: {e}")
         return Response(
@@ -705,7 +705,7 @@ def ask_gemini_with_data(request, max_retries=2, delay=2):
 
     full_prompt = (
         "You are a chemistry assistant specialising in MOFs and COFs. "
-        "Use the following linker reference data to answer the user's question.\n\n"
+        "Use the following MOF reference data to answer the user's question.\n\n"
         f"{csv_content}\n\n"
         f"USER QUESTION: {prompt}"
     )
