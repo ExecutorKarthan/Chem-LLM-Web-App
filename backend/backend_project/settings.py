@@ -6,26 +6,39 @@ from corsheaders.defaults import default_headers
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 print("Base directory for settings:", BASE_DIR)
+
 ############################################
 # Environment
 ############################################
 print("Loading environment variables from .env file at:", BASE_DIR / "backend_project" / ".env")
-# Load .env file if present
 load_dotenv(BASE_DIR / "backend_project" / ".env")
 
 SECRET_KEY = os.getenv("DJANGO_SECRET_KEY")
 if not SECRET_KEY:
-    raise RuntimeError("DJANGO_SECRET_KEY not set in .env file")
+    raise RuntimeError(
+        "DJANGO_SECRET_KEY not set. "
+        "Copy backend/backend_project/.env.template to .env and fill it in."
+    )
 
 DEBUG = os.getenv("DJANGO_DEBUG", "False") == "True"
 
 ############################################
 # Hosts
+# ──────────────────────────────────────────
+# PRODUCTION_DOMAIN is read from your .env file.
+#
+# !! REPLACE "your-app.your-domain.com" in your .env with your real domain !!
+#
+# If you are forking this repo to deploy your own instance:
+#   1. Copy backend/backend_project/.env.template → .env
+#   2. Set PRODUCTION_DOMAIN to your server's domain or IP
 ############################################
+PRODUCTION_DOMAIN = os.getenv("PRODUCTION_DOMAIN", "your-app.your-domain.com")
+
 ALLOWED_HOSTS = [
     "localhost",
     "127.0.0.1",
-    "llmexplorer.engr.wustl.edu",
+    PRODUCTION_DOMAIN,
 ]
 
 ############################################
@@ -62,52 +75,47 @@ MIDDLEWARE = [
 # CORS / CSRF
 ############################################
 CORS_ALLOWED_ORIGINS = [
-    'http://localhost:8000',
-    'http://127.0.0.1:8000',
-    'http://localhost:32775',  # Vite dev server
-    'https://llmexplorer.engr.wustl.edu',  # HTTPS for production
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+    "http://localhost:32775",            # Vite dev server
+    f"https://{PRODUCTION_DOMAIN}",     # Production HTTPS
 ]
 
 CORS_ALLOW_HEADERS = list(default_headers) + ["X-Token", "X-CSRFToken"]
 CORS_ALLOW_CREDENTIALS = True
 
 CSRF_TRUSTED_ORIGINS = [
-    'http://localhost:8000',
-    'http://127.0.0.1:8000',
-    'http://localhost:32775',
-    'https://llmexplorer.engr.wustl.edu',  # HTTPS for production
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+    "http://localhost:32775",
+    f"https://{PRODUCTION_DOMAIN}",
 ]
 
 # CSRF Cookie Settings
-CSRF_COOKIE_NAME = 'csrftoken'
-CSRF_COOKIE_HTTPONLY = False  # Must be False so JavaScript can read it
-CSRF_COOKIE_SAMESITE = 'Lax'  # Changed from 'None' - 'Lax' works for same-site and is more compatible
-CSRF_COOKIE_SECURE = not DEBUG  # True in production (HTTPS), False in dev (HTTP)
+CSRF_COOKIE_NAME = "csrftoken"
+CSRF_COOKIE_HTTPONLY = False        # Must be False so JavaScript can read it
+CSRF_COOKIE_SAMESITE = "Lax"       # Lax is consistent with tokenize_key in views.py
+CSRF_COOKIE_SECURE = not DEBUG      # True in production (HTTPS), False in dev (HTTP)
 
 ############################################
-# Cache Configuration (REQUIRED for token storage)
+# Cache (in-memory — no Redis required)
 ############################################
 CACHES = {
     "default": {
-        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",  # Use in-memory cache instead
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
     }
 }
 
-
 ############################################
-# Static files (React build)
+# Static files (React build output)
 ############################################
 STATIC_URL = "/assets/"
-
-# Use local path, not /opt/app (production container sets this via env var)
 STATIC_ROOT = Path(os.environ.get("DJANGO_STATIC_ROOT", BASE_DIR / "staticfiles"))
 
-# Point to React build assets
 STATICFILES_DIRS = [
-    BASE_DIR / "assets" / "static",  # Puzzle images
+    BASE_DIR / "assets" / "static",
 ]
 
-# Add React dist/assets if it exists
 DIST_ASSETS = BASE_DIR.parent / "frontend" / "dist" / "assets"
 if DIST_ASSETS.exists() and DIST_ASSETS != STATIC_ROOT:
     STATICFILES_DIRS.append(DIST_ASSETS)
@@ -115,16 +123,14 @@ if DIST_ASSETS.exists() and DIST_ASSETS != STATIC_ROOT:
 STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
 
 ############################################
-# Templates (React index.html)
+# Templates (React index.html served by Django)
 ############################################
 REACT_BUILD_DIR = BASE_DIR.parent / "frontend" / "dist"
 
 TEMPLATES = [
     {
         "BACKEND": "django.template.backends.django.DjangoTemplates",
-        "DIRS": [
-            REACT_BUILD_DIR,  # Serve React index.html
-        ],
+        "DIRS": [REACT_BUILD_DIR],
         "APP_DIRS": True,
         "OPTIONS": {
             "context_processors": [
@@ -137,13 +143,14 @@ TEMPLATES = [
 ]
 
 ############################################
-# URLs
+# URLs / WSGI
 ############################################
 ROOT_URLCONF = "backend_project.urls"
 WSGI_APPLICATION = "backend_project.wsgi.application"
 
 ############################################
-# Database
+# Database (SQLite — only used for Django
+# internals like sessions; app has no DB needs)
 ############################################
 DATABASES = {
     "default": {
@@ -167,7 +174,6 @@ SECURE_BROWSER_XSS_FILTER = True
 SECURE_CONTENT_TYPE_NOSNIFF = True
 X_FRAME_OPTIONS = "DENY"
 
-# Cookie security (HTTP for development, HTTPS for production)
 SESSION_COOKIE_SECURE = not DEBUG
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_AGE = 5400

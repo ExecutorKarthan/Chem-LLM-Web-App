@@ -6,80 +6,76 @@ import { faEye, faEyeSlash } from '@fortawesome/free-solid-svg-icons';
 import { BACKEND_URL } from "../config.js";
 import getCSRFToken from "../utils/CSRFReader.js";
 
-// Create an initial page that will restrict people from accessing the app without accepting the terms or providing an API key
+// Create an initial page that will restrict people from accessing the app
+// without accepting the terms or providing an API key
 const SplashGate: React.FC = () => {
-  
+
   // Create constants and their mutators for reference
   const [agreed, setAgreed] = useState(false);
   const [apiKey, setApiKey] = useState("");
   const [error, setError] = useState("");
   const [showApiKey, setShowApiKey] = useState(false);
 
-  const api = axios.create({
-    baseURL: "http://localhost:8000",  // backend URL
-    withCredentials: true,             // must for CSRF cookie
-    headers: {
-      "X-CSRFToken": getCSRFToken() || "",
-    },
-  });
-
   // Generate behavior for the submission button
-const handleSubmit = async () => {
-  if (!agreed) {
-    setError("You must agree to the terms.");
-    return;
-  }
-  if (!apiKey.trim()) {
-    setError("API key is required.");
-    return;
-  }
-  
-  try {
-    // First, ensure we have a CSRF token
-    await axios.get(`${BACKEND_URL}/api/csrf/`, { withCredentials: true });
-    
-    const csrfToken = getCSRFToken();
-    console.log('🔐 CSRF token:', csrfToken ? 'Found' : 'Not found');
-    
-    const url = `${BACKEND_URL}/api/tokenize-key/`;
-    console.log('🔑 Tokenizing key at:', url);
-    
-    const response = await axios.post(
-      url,
-      { apiKey: apiKey.trim() },
-      { 
-        withCredentials: true,
-        headers: {
-          'X-CSRFToken': csrfToken || '',
-        }
-      },
-    );
-    
-    console.log('✅ Tokenize response:', response.status);
-    
-    if (response.status === 200) {
-      localStorage.setItem("gemini_token", "agreed");
-      window.location.reload();
-    } else {
-      setError("Failed to authenticate API key.");
+  const handleSubmit = async () => {
+    if (!agreed) {
+      setError("You must agree to the terms.");
+      return;
     }
-  } catch (err: any) {
-    console.error("❌ Tokenize error:", err);
-    console.error("Error response:", err.response?.data);
-    setError(err.response?.data?.error || "Failed to connect to the server.");
-  }
-};
+    if (!apiKey.trim()) {
+      setError("API key is required.");
+      return;
+    }
+
+    try {
+      // Ensure we have a CSRF token before submitting.
+      // BACKEND_URL is "" in production (relative URLs, Django serves everything)
+      // and "http://localhost:8000" in development (Vite dev server proxies /api).
+      // It is never hardcoded here — see src/config.ts.
+      await axios.get(`${BACKEND_URL}/api/csrf/`, { withCredentials: true });
+
+      const csrfToken = getCSRFToken();
+      console.log('🔐 CSRF token:', csrfToken ? 'Found' : 'Not found');
+
+      const url = `${BACKEND_URL}/api/tokenize-key/`;
+      console.log('🔑 Tokenizing key at:', url);
+
+      const response = await axios.post(
+        url,
+        { apiKey: apiKey.trim() },
+        {
+          withCredentials: true,
+          headers: {
+            'X-CSRFToken': csrfToken || '',
+          },
+        },
+      );
+
+      console.log('✅ Tokenize response:', response.status);
+
+      if (response.status === 200) {
+        localStorage.setItem("gemini_token", "agreed");
+        window.location.reload();
+      } else {
+        setError("Failed to authenticate API key.");
+      }
+    } catch (err: any) {
+      console.error("❌ Tokenize error:", err);
+      console.error("Error response:", err.response?.data);
+      setError(err.response?.data?.error || "Failed to connect to the server.");
+    }
+  };
 
   // Return the HTML for the browser to show
   return (
     <div style={{ padding: "2rem", maxWidth: "600px", margin: "auto" }}>
       {/* Define a section for terms and conditions */}
-      <h1>Terms & Conditions</h1>
+      <h1>Terms &amp; Conditions</h1>
       <p>
         By using this app, you agree to the following terms and conditions:
         <br /><br />
         <strong>1. Use in Accordance with Model Provider Terms</strong><br />
-        This tool uses the Gemini large language model provided by Google. Your use of this application must fully comply with Google’s{' '}
+        This tool uses the Gemini large language model provided by Google. Your use of this application must fully comply with Google's{' '}
         <a href="https://policies.google.com/terms" target="_blank" rel="noopener noreferrer">AI Terms of Service</a> and any other applicable terms governing the use of their large language models.
         <br /><br />
         <strong>2. Intended for Academic Use Only</strong><br />
@@ -87,9 +83,9 @@ const handleSubmit = async () => {
         <br /><br />
         <strong>3. No Student Use Without Explicit District Approval</strong><br />
         Students must <strong>not</strong> use this tool unless:<br />
-        &nbsp;&nbsp;&bull; Their school district’s IT department has explicitly approved such use, <strong>and</strong><br />
-        &nbsp;&nbsp;&bull; The use complies with Google’s terms for AI services.<br />
-        School districts are responsible for ensuring compliance with their institution’s policies regarding student interaction with AI technologies.
+        &nbsp;&nbsp;&bull; Their school district's IT department has explicitly approved such use, <strong>and</strong><br />
+        &nbsp;&nbsp;&bull; The use complies with Google's terms for AI services.<br />
+        School districts are responsible for ensuring compliance with their institution's policies regarding student interaction with AI technologies.
         <br /><br />
         <strong>4. API Key Handling and Browser Security</strong><br />
         Your API key is temporarily stored in your browser as a token in a secure cookie (not on any external server). For security reasons:<br />
@@ -100,7 +96,7 @@ const handleSubmit = async () => {
         <br /><br />
         By clicking "Continue" or using the application, you confirm that you understand and accept these conditions.
       </p>
-      {/* Create a check box and to agree to terms and conditions */}
+      {/* Checkbox to agree to terms and conditions */}
       <label style={{ display: "block", margin: "1rem 0" }}>
         <input
           type="checkbox"
@@ -109,7 +105,7 @@ const handleSubmit = async () => {
         />
         I agree to the terms and conditions
       </label>
-      {/* Create a space to add your Gemini Key or be directed to get one */}
+      {/* API key input */}
       <label style={{ display: "block", marginBottom: "1rem", position: "relative" }}>
         Enter your Gemini API key:
         <input
@@ -122,10 +118,10 @@ const handleSubmit = async () => {
             width: "100%",
             padding: "0.5rem",
             marginTop: "0.5rem",
-            paddingRight: "2.5rem" 
+            paddingRight: "2.5rem",
           }}
         />
-        {/* Create a button to show the API key*/}
+        {/* Toggle API key visibility */}
         <button
           type="button"
           onClick={() => setShowApiKey(prev => !prev)}
@@ -138,15 +134,15 @@ const handleSubmit = async () => {
             fontSize: "1rem",
             cursor: "pointer",
             padding: 0,
-            lineHeight: 1
+            lineHeight: 1,
           }}
           aria-label={showApiKey ? "Hide API key" : "Show API key"}
         >
           <FontAwesomeIcon icon={showApiKey ? faEye : faEyeSlash} />
         </button>
-        {/* Provide guidence to get an API key*/}
+        {/* Link to get an API key */}
         <small style={{ display: "block", marginTop: "0.5rem", fontSize: "0.9rem" }}>
-          Don’t have a Gemini API key?&nbsp;
+          Don't have a Gemini API key?&nbsp;
           <a
             href="https://makersuite.google.com/app/apikey"
             target="_blank"
@@ -157,7 +153,11 @@ const handleSubmit = async () => {
           </a>.
         </small>
       </label>
-      {/* Create a button to submit the terms acceptance, API key and select the Chemistry Explorer */}
+      {/* Error message display */}
+      {error && (
+        <p style={{ color: "red", marginBottom: "1rem" }}>{error}</p>
+      )}
+      {/* Submit button */}
       <button onClick={() => handleSubmit()} style={{ padding: "0.75rem 1.5rem" }}>
         MOF AI Chemistry
       </button>
