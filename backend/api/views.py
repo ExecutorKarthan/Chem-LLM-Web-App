@@ -214,11 +214,11 @@ def ask_gemini(request, max_retries=2, delay=2):
     logger.info("[ASK_GEMINI] ========== NEW REQUEST ==========")
 
     model_names = [
-        "gemini-3-pro-preview",
-        "gemini-3-flash-preview",
-        "gemini-2.5-flash",
-        "gemini-2.5-flash-lite",
-        "gemini-2.5-pro",
+        "gemini-2.5-flash",       # stable, fast, generous quota -- try first
+        "gemini-2.5-flash-lite",  # stable, lightweight fallback
+        "gemini-2.5-pro",         # stable, most capable
+        "gemini-3-flash-preview", # preview -- unreliable, last resort
+        "gemini-3-pro-preview",   # preview -- unreliable, last resort
     ]
 
     token = request.COOKIES.get("gemini_token")
@@ -313,7 +313,7 @@ def load_mof_csv():
         )
 
     rows = []
-    with open(MOF_CSV_PATH, newline="", encoding="utf-8-sig") as f:
+    with open(MOF_CSV_PATH, newline="", encoding="utf-8-sig") as f:  # utf-8-sig strips BOM from Windows-saved CSVs
         reader = csv.DictReader(f)
         headers = reader.fieldnames
         if not headers:
@@ -374,11 +374,11 @@ def prime_gemini(request, max_retries=2, delay=2):
     )
 
     model_names = [
-        "gemini-3-pro-preview",
-        "gemini-3-flash-preview",
-        "gemini-2.5-flash",
-        "gemini-2.5-flash-lite",
-        "gemini-2.5-pro",
+        "gemini-2.5-flash",       # stable, fast, generous quota -- try first
+        "gemini-2.5-flash-lite",  # stable, lightweight fallback
+        "gemini-2.5-pro",         # stable, most capable
+        "gemini-3-flash-preview", # preview -- unreliable, last resort
+        "gemini-3-pro-preview",   # preview -- unreliable, last resort
     ]
 
     try:
@@ -465,11 +465,11 @@ def ask_gemini_with_data(request, max_retries=2, delay=2):
     )
 
     model_names = [
-        "gemini-3-pro-preview",
-        "gemini-3-flash-preview",
-        "gemini-2.5-flash",
-        "gemini-2.5-flash-lite",
-        "gemini-2.5-pro",
+        "gemini-2.5-flash",       # stable, fast, generous quota -- try first
+        "gemini-2.5-flash-lite",  # stable, lightweight fallback
+        "gemini-2.5-pro",         # stable, most capable
+        "gemini-3-flash-preview", # preview -- unreliable, last resort
+        "gemini-3-pro-preview",   # preview -- unreliable, last resort
     ]
 
     try:
