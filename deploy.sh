@@ -2,42 +2,34 @@
 # =============================================================================
 # deploy.sh — Chem-LLM-Web-App
 #
-# Mirrors the style of MOFinder's deploy.sh at /var/www/mofinder/deploy.sh.
+# Just run this script — it finds everything else itself.
+# All sibling files (chem-llm.def, container_start.sh, etc.) are copied
+# into place automatically on first run.
 #
-# What this script does on every run:
-#   1. Checks GitHub 'deploy' branch for updates
-#   2. If updates exist (or first run): re-clones source into a timestamped
-#      release folder, rebuilds the Apptainer container
-#   3. Generates .env if it doesn't exist
-#   4. Switches the 'current' symlink to the new release
-#   5. Starts the Apptainer container (Gunicorn on 8000 inside,
-#      exposed on 3001 → nginx → 443 externally)
-#   6. Keeps only the last 5 releases
+# Usage:
+#   bash deploy.sh
 #
-# Directory layout:
-#   /var/www/chem-llm/
-#   ├── deploy.sh               ← this file
-#   ├── chem-llm.def            ← Apptainer definition file
-#   ├── chem-llm.sif            ← built Apptainer image (generated)
-#   ├── current -> releases/... ← symlink to active release
-#   ├── releases/
-#   │   └── 20250621-120000/    ← timestamped release folders
-#   │       └── Chem-LLM-Web-App/
-#   ├── shared/
-#   │   ├── ecosystem.config.js
-#   │   └── .env                ← persistent, never in git
-#   └── logs/
 # =============================================================================
 
 set -e
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Resolve script's own directory — sibling files live here
+# ─────────────────────────────────────────────────────────────────────────────
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Configuration
 # !! REPLACE YOUR_SUBDOMAIN once confirmed with WashU IT !!
 # ─────────────────────────────────────────────────────────────────────────────
 GITHUB_REPO="https://github.com/ExecutorKarthan/Chem-LLM-Web-App.git"
-DEPLOY_BRANCH="deploy"
-APP_DIR="/var/www/chem-llm"
+DEPLOY_BRANCH="ubuntu-deploy"
+
+# APP_DIR -- toggle by commenting/uncommenting the appropriate line:
+#   Zorin local testing  -->  uncomment the first line
+#   Ubuntu server        -->  uncomment the second line
+APP_DIR="$HOME/chem-llm-test"   # Zorin testing
+#APP_DIR="/var/www/chem-llm"    # Ubuntu server
 RELEASES_DIR="$APP_DIR/releases"
 SHARED_DIR="$APP_DIR/shared"
 LOG_DIR="$APP_DIR/logs"
@@ -51,9 +43,9 @@ ENV_FILE="$SHARED_DIR/.env"
 PM2_CONFIG="$SHARED_DIR/ecosystem.config.js"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Setup directories
+# Create all required directories
 # ─────────────────────────────────────────────────────────────────────────────
-mkdir -p "$RELEASES_DIR" "$SHARED_DIR" "$LOG_DIR"
+mkdir -p "$APP_DIR" "$RELEASES_DIR" "$SHARED_DIR" "$LOG_DIR"
 
 DEPLOY_LOG="$LOG_DIR/deploy.log"
 TIMESTAMP_HUMAN=$(date '+%Y-%m-%d %H:%M:%S')
@@ -65,6 +57,29 @@ log() {
 log_install() {
     echo "$1" | tee -a "$INSTALL_LOG"
 }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Self-bootstrap — copy sibling files into APP_DIR if not already there.
+# This means you only need deploy.sh in front of you to get started.
+# ─────────────────────────────────────────────────────────────────────────────
+for f in chem-llm.def container_start.sh cron_update.sh; do
+    if [ ! -f "$APP_DIR/$f" ]; then
+        if [ -f "$SCRIPT_DIR/$f" ]; then
+            cp "$SCRIPT_DIR/$f" "$APP_DIR/$f"
+            chmod +x "$APP_DIR/$f" 2>/dev/null || true
+        else
+            echo "ERROR: $f not found next to deploy.sh ($SCRIPT_DIR/$f)"
+            echo "Make sure all scripts branch files are in the same directory as deploy.sh"
+            exit 1
+        fi
+    fi
+done
+
+if [ ! -f "$SHARED_DIR/ecosystem.config.js" ]; then
+    if [ -f "$SCRIPT_DIR/ecosystem.config.js" ]; then
+        cp "$SCRIPT_DIR/ecosystem.config.js" "$SHARED_DIR/ecosystem.config.js"
+    fi
+fi
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Initialize install log on first run
@@ -93,12 +108,23 @@ log "--- Step 1: Source code ---"
 NEEDS_REBUILD=false
 CURRENT_LINK="$APP_DIR/current"
 
+place_container_start() {
+    # The container's runscript looks for container_start.sh at
+    # /app/source/container_start.sh, which bind-mounts to $NEW_RELEASE.
+    # Since container_start.sh is not part of the git repo, we copy it
+    # from APP_DIR (where the self-bootstrap placed it) into the release.
+    cp "$APP_DIR/container_start.sh" "$1/container_start.sh"
+    chmod +x "$1/container_start.sh"
+    log "container_start.sh placed in release"
+}
+
 if [ ! -L "$CURRENT_LINK" ] || [ ! -d "$CURRENT_LINK" ]; then
     log "No current release found — cloning fresh"
     mkdir -p "$NEW_RELEASE"
     git clone --branch "$DEPLOY_BRANCH" "$GITHUB_REPO" "$NEW_RELEASE/Chem-LLM-Web-App" \
         >> "$DEPLOY_LOG" 2>&1
     log "Clone complete into $NEW_RELEASE"
+    place_container_start "$NEW_RELEASE"
     log_install "- First clone from: $GITHUB_REPO (branch: $DEPLOY_BRANCH)"
     NEEDS_REBUILD=true
 else
@@ -114,6 +140,7 @@ else
         git clone --branch "$DEPLOY_BRANCH" "$GITHUB_REPO" "$NEW_RELEASE/Chem-LLM-Web-App" \
             >> "$DEPLOY_LOG" 2>&1
         log "Clone complete into $NEW_RELEASE"
+        place_container_start "$NEW_RELEASE"
         log_install "- Updated: ${LOCAL:0:8} → ${REMOTE:0:8}"
         NEEDS_REBUILD=true
     else
@@ -162,10 +189,6 @@ log ".env symlinked into release"
 log "--- Step 3: Apptainer container ---"
 
 if [ ! -f "$SIF_FILE" ] || [ "$NEEDS_REBUILD" = true ]; then
-    if [ ! -f "$DEF_FILE" ]; then
-        log "ERROR: $DEF_FILE not found — cannot build"
-        exit 1
-    fi
     [ -f "$SIF_FILE" ] && rm -f "$SIF_FILE"
     log "Building container (this takes a few minutes on first run)..."
 

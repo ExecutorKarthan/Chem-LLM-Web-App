@@ -3,25 +3,19 @@ From: python:3.13-slim
 
 %labels
     Author Chem-LLM-Web-App
-    Version 1.0
+    Version 1.1
     Description Django + React chemistry LLM web application
 
 %environment
-    # Python
     export PYTHONDONTWRITEBYTECODE=1
     export PYTHONUNBUFFERED=1
     export PATH="/opt/venv/bin:$PATH"
-
-    # Node - installed at build time under /opt/node
-    export PATH="/opt/node/bin:$PATH"
-
-    # Django will look for .env here (bind-mounted source)
     export DJANGO_SETTINGS_MODULE=backend_project.settings
 
 %post
-    # ─────────────────────────────────────────────────────────────────────────
-    # 0. Timestamp and base system packages
-    # ─────────────────────────────────────────────────────────────────────────
+    # -------------------------------------------------------------------------
+    # 0. Base system packages
+    # -------------------------------------------------------------------------
     BUILD_DATE=$(date '+%Y-%m-%d %H:%M:%S')
     echo "=== BUILD STARTED: $BUILD_DATE ===" > /build_log.txt
 
@@ -35,9 +29,9 @@ From: python:3.13-slim
 
     echo "=== System packages installed ===" >> /build_log.txt
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # 1. Install latest Node.js (via NodeSource - tracks latest LTS)
-    # ─────────────────────────────────────────────────────────────────────────
+    # -------------------------------------------------------------------------
+    # 1. Install Node.js 24
+    # -------------------------------------------------------------------------
     NODE_MAJOR=24
     curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR}.x | bash -
     apt-get install -y nodejs
@@ -45,40 +39,62 @@ From: python:3.13-slim
     npm --version >> /build_log.txt
     echo "=== Node.js installed ===" >> /build_log.txt
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # 2. Python virtual environment
-    # ─────────────────────────────────────────────────────────────────────────
+    # -------------------------------------------------------------------------
+    # 2. Python virtual environment + ALL dependencies baked in at build time
+    #    This avoids running pip at container startup where tmpfs space is
+    #    limited. The venv lives in the image so startup is instant.
+    # -------------------------------------------------------------------------
     python3 --version >> /build_log.txt
     python3 -m venv /opt/venv
     /opt/venv/bin/pip install --upgrade pip setuptools wheel
-    pip --version >> /build_log.txt
-    echo "=== Python venv created ===" >> /build_log.txt
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # 3. Create app directory structure
-    #    Source files are bind-mounted at runtime from the host.
-    #    We create the directories here so the mount points exist.
-    # ─────────────────────────────────────────────────────────────────────────
+    /opt/venv/bin/pip install \
+        Django==6.0.6 \
+        djangorestframework==3.17.1 \
+        django-cors-headers==4.9.0 \
+        whitenoise==6.12.0 \
+        gunicorn==26.0.0 \
+        python-dotenv==1.2.2 \
+        google-genai==2.8.0 \
+        google-auth==2.53.0 \
+        google==3.0.0 \
+        httpx==0.28.1 \
+        httpcore==1.0.9 \
+        anyio==4.13.0 \
+        certifi==2026.5.20 \
+        charset-normalizer==3.4.7 \
+        idna==3.18 \
+        urllib3==2.7.0 \
+        requests==2.34.2 \
+        h11==0.16.0 \
+        pydantic==2.13.4 \
+        pydantic_core==2.46.4 \
+        annotated-types==0.7.0 \
+        typing_extensions==4.15.0
+
+    echo "=== Python dependencies installed ===" >> /build_log.txt
+    /opt/venv/bin/pip list >> /build_log.txt
+
+    # -------------------------------------------------------------------------
+    # 3. Create mount point directories
+    #    Source files are bind-mounted at runtime — we just need the dirs.
+    # -------------------------------------------------------------------------
     mkdir -p /app/source
     mkdir -p /app/logs
     mkdir -p /app/data
 
-    echo "=== Directory structure created ===" >> /build_log.txt
     echo "=== BUILD COMPLETE ===" >> /build_log.txt
 
 %runscript
-    # ─────────────────────────────────────────────────────────────────────────
-    # This runs every time the container starts (via pm2 or manually).
-    # Source files are already bind-mounted at /app/source by deploy.sh.
-    # ─────────────────────────────────────────────────────────────────────────
     exec /app/source/container_start.sh
 
 %test
-    # Basic sanity checks run after build
     echo "--- Apptainer build test ---"
     python3 --version
     node --version
     npm --version
     /opt/venv/bin/python --version
     /opt/venv/bin/pip --version
+    /opt/venv/bin/python -c "import django; print('Django', django.__version__)"
+    /opt/venv/bin/python -c "import google.genai; print('google-genai OK')"
     echo "--- All checks passed ---"
