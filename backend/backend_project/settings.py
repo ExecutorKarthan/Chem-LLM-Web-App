@@ -98,11 +98,15 @@ CSRF_COOKIE_SAMESITE = "Lax"       # Lax is consistent with tokenize_key in view
 CSRF_COOKIE_SECURE = not DEBUG      # True in production (HTTPS), False in dev (HTTP)
 
 ############################################
-# Cache (in-memory — no Redis required)
+# Cache
+# File-based cache so tokens survive Gunicorn worker restarts.
+# LocMemCache is per-process and loses all tokens if a worker dies.
+# File cache persists across worker restarts and is safe for single-server use.
 ############################################
 CACHES = {
     "default": {
-        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        "BACKEND": "django.core.cache.backends.filebased.FileBasedCache",
+        "LOCATION": os.environ.get("DJANGO_CACHE_DIR", "/tmp/django_cache"),
     }
 }
 
