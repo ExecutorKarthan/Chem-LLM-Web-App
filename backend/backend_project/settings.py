@@ -17,23 +17,16 @@ SECRET_KEY = os.getenv("DJANGO_SECRET_KEY")
 if not SECRET_KEY:
     raise RuntimeError(
         "DJANGO_SECRET_KEY not set. "
-        "Copy backend/backend_project/.env.template to .env and fill it in."
+        "Check that shared/.env exists and is symlinked into the release."
     )
 
 DEBUG = os.getenv("DJANGO_DEBUG", "False") == "True"
 
 ############################################
 # Hosts
-# ──────────────────────────────────────────
-# PRODUCTION_DOMAIN is read from your .env file.
-#
-# !! REPLACE "your-app.your-domain.com" in your .env with your real domain !!
-#
-# If you are forking this repo to deploy your own instance:
-#   1. Copy backend/backend_project/.env.template → .env
-#   2. Set PRODUCTION_DOMAIN to your server's domain or IP
+# !! REPLACE YOUR_SUBDOMAIN once confirmed with WashU IT !!
 ############################################
-PRODUCTION_DOMAIN = os.getenv("PRODUCTION_DOMAIN", "your-app.your-domain.com")
+PRODUCTION_DOMAIN = os.getenv("PRODUCTION_DOMAIN", "YOUR_SUBDOMAIN.chemistry.wustl.edu")
 
 ALLOWED_HOSTS = [
     "localhost",
@@ -77,8 +70,8 @@ MIDDLEWARE = [
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:8000",
     "http://127.0.0.1:8000",
-    "http://localhost:32775",            # Vite dev server
-    f"https://{PRODUCTION_DOMAIN}",     # Production HTTPS
+    "http://localhost:32775",
+    f"https://{PRODUCTION_DOMAIN}",
 ]
 
 CORS_ALLOW_HEADERS = list(default_headers) + ["X-Token", "X-CSRFToken"]
@@ -91,14 +84,13 @@ CSRF_TRUSTED_ORIGINS = [
     f"https://{PRODUCTION_DOMAIN}",
 ]
 
-# CSRF Cookie Settings
 CSRF_COOKIE_NAME = "csrftoken"
-CSRF_COOKIE_HTTPONLY = False        # Must be False so JavaScript can read it
-CSRF_COOKIE_SAMESITE = "Lax"       # Lax is consistent with tokenize_key in views.py
-CSRF_COOKIE_SECURE = not DEBUG      # True in production (HTTPS), False in dev (HTTP)
+CSRF_COOKIE_HTTPONLY = False
+CSRF_COOKIE_SAMESITE = "Lax"
+CSRF_COOKIE_SECURE = not DEBUG
 
 ############################################
-# Cache (in-memory — no Redis required)
+# Cache
 ############################################
 CACHES = {
     "default": {
@@ -107,7 +99,7 @@ CACHES = {
 }
 
 ############################################
-# Static files (React build output)
+# Static files
 ############################################
 STATIC_URL = "/assets/"
 STATIC_ROOT = Path(os.environ.get("DJANGO_STATIC_ROOT", BASE_DIR / "staticfiles"))
@@ -123,7 +115,7 @@ if DIST_ASSETS.exists() and DIST_ASSETS != STATIC_ROOT:
 STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
 
 ############################################
-# Templates (React index.html served by Django)
+# Templates
 ############################################
 REACT_BUILD_DIR = BASE_DIR.parent / "frontend" / "dist"
 
@@ -149,8 +141,7 @@ ROOT_URLCONF = "backend_project.urls"
 WSGI_APPLICATION = "backend_project.wsgi.application"
 
 ############################################
-# Database (SQLite — only used for Django
-# internals like sessions; app has no DB needs)
+# Database
 ############################################
 DATABASES = {
     "default": {
