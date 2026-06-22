@@ -1,121 +1,172 @@
-# LLM-Web-App
-This educational tool supports students from 6th grade and up by demonstrating the benefits, drawbacks, and ethical considerations involved in using large language models (LLMs). It is strictly for educational use, specifically as a demonstration of AI's capabilities. This app is deployed via Render and can be viewed here [https://llm-web-app-4970.onrender.com/](https://llm-web-app-4970.onrender.com/)
+# Chem-LLM-Web-App — Scripts Branch
 
-## Table of Contents
-1. [Description](#description)
-    * [Language and Library Rationale](#language-and-library-rationale)
-    * [React Frontend Orientation](#react-frontend-orientation)
-    * [Django Backend Orientation](#django-backend-orientation)
-2. [Installation](#installation)
-5. [License](#license)
-6. [Contributing](#contributing)
-7. [Tests](#tests)
-8. [Questions](#questions)
+This branch contains only the deployment infrastructure for running
+Chem-LLM-Web-App on an Ubuntu 24 server using Apptainer, pm2, and nginx.
+It does not contain the application source code.
 
-## Description
-### Language and Library Rationale
-This particular application has several moving parts to its operation. We will begin with its base structure: a React page written in TypeScript. I chose to use React as it is a modern framework that is well-supported with documentation and numerous libraries. React is written in JavaScript and its variations, such as TypeScript in this case, allowing for an app that is easy to update as the state variables changed. React also allows the app to be scalable and device-responsive without a heavy reliance on Cascading Style Sheets (CSS). Documentation on React and how it works can be found here: [https://react.dev/](https://react.dev/).
+## Three-Branch Structure
 
-The app is written in TypeScript as a way for me to impose strict typing requirements on JavaScript - a non-type safe language. TypeScript requires every variable declaration to have an associated type, much like Java or C-based languages require type prefixes. This allows me to catch variable type conflicts prior to running and deployment, resulting in more intentional code design. More on TypeScript can be found here: [https://www.typescriptlang.org/](https://www.typescriptlang.org/).
+```
+main
+├── Raw application source code
+├── Generic placeholders for domain, secret key, etc.
+└── Fork-friendly: fill in .env.template and go
 
-The app utilizes Google's Gemini API to send queries to and receive replies from Gemini. The app needed access to some style of LLM and Gemini was chosen due to its easy access to a free-tier operations. There are numerous models of Gemini, each with their own limits in terms of character count and number of requests per day, so the app will change which model it queries depending on model availability and if its limits are exceeded. The Gemini API documentation can be found here: [https://ai.google.dev/gemini-api/docs](https://ai.google.dev/gemini-api/docs)
+Ubuntu-Server-Deployment
+├── Same app code as main
+├── WashU-specific values filled in (domain, paths)
+└── What deploy.sh clones from GitHub
 
-Due to its reliance on Gemini, the app requires the user to have a valid Gemini API key. These can be gotten free of charge here: [https://makersuite.google.com/app/apikey](https://makersuite.google.com/app/apikey)  
+scripts (this branch)
+├── Deployment infrastructure only
+├── Points at Ubuntu-Server-Deployment for source code
+└── Never needs updating unless infrastructure changes
+```
 
-The app also needs to allow the user to write and execute code in Python. This is done through the use of the Monaco Editor [https://microsoft.github.io/monaco-editor/](https://microsoft.github.io/monaco-editor/) and a Skulpt Display [https://skulpt.org/](https://skulpt.org/). Monaco is a module that creates editor objects in React that serves as an IDE-like text environment, making it user-friendly. Skulpt is a module that compiles Python into JavaScript, thus converting the inputted Python code into a Javascript form that can be run in the web browser.
+## Update Workflow
 
-A macro view of the interactions of this app can be seen in this diagram:
-![App Interaction Overview](./assets/Complete-Web-LLM-Diagram.png)
+```
+Make app changes on main
+        ↓
+Merge main into Ubuntu-Server-Deployment
+        ↓
+cron_update.sh detects the change (every 5 min)
+        ↓
+pm2 restarts → deploy.sh pulls new code → rebuilds container
+        ↓
+Live on server within 5 minutes, no manual steps
+```
 
-### React Frontend Orientation
-The first page of the app is a "splashgate" that prevents users from interacting with the main page until two pieces of data are collected. 
+The scripts branch itself only needs to change if you modify how the
+container is built or how the server is configured — not for app changes.
 
-Firstly, the terms and conditions of the app must be agreed to. This app is meant for educational use only, with the intention that the educators will use it as a demonstration for their class to be guided through. Currently, many LLMs require users to be 18 or older. As a result, the user needs to agree that they meet and will follow the Gemini agreement criteria, or they cannot use the app.
+## Files in This Branch
 
-Secondly, any interaction with an LLM in this app requires an API key. This API key is also required for access beyond the splashgate. This key is not as required as the agreement to the terms and conditions, since a non-functional key will result in an LLM return error - so access to the LLM would still be barred. **Please Note - ** The API key is tokenized by the Django server and cached in the browser. The API key is hidden via the token, but will only be cleared after 1 hour or when the user manually clears their browser cache.
+| File | Purpose |
+|------|---------|
+| `chem-llm.def` | Apptainer definition — Python 3.13 + Node 24 container |
+| `deploy.sh` | Master script — update check, container build, start |
+| `container_start.sh` | Runs inside container — pip install, React build, Gunicorn |
+| `cron_update.sh` | Called by cron every 5 min — detects GitHub changes |
+| `ecosystem.config.js` | pm2 config — keeps app running, restarts on crash |
+| `chem-llm.conf` | nginx server block — routes domain to port 3001 |
 
-Once beyond the splashgate, the main App has four sections as seen in this diagram:
-![LLM Web App Layout Diagram](./assets/LLM-App-Diagram.png)
+## Server Directory Layout
 
-The "LLM Entry Box" is where you can type your query that will be sent to some version of Gemini. Your query can be structured in any form of text, but must be text as there is no way to submit any other medium via the app. The "Submit request" button will take the text entered in the box and send it to the Django backend server. The Django server will then retrieve the user's API key with the user's token, then forwards that API key and the submitted text to the Gemini LLM. 
+```
+/var/www/chem-llm/
+├── deploy.sh                  ← from this branch
+├── chem-llm.def               ← from this branch
+├── chem-llm.sif               ← built by deploy.sh, not in git
+├── current -> releases/...    ← symlink managed by deploy.sh
+├── releases/
+│   └── 20250621-120000/
+│       └── Chem-LLM-Web-App/  ← cloned from Ubuntu-Server-Deployment
+├── shared/
+│   ├── ecosystem.config.js    ← from this branch
+│   └── .env                   ← generated by deploy.sh, never in git
+├── logs/
+│   ├── deploy.log
+│   ├── startup.log
+│   └── cron.log
+└── INSTALL_LOG.md             ← auto-generated, records every deploy
+```
 
-Once the LLM responds to the Django server, that response is then forwarded to the React frontend. Assuming the response is Python code, the frontend will process it by removing code explanations provided by the LLM and it will add needed formatting so the code will be recognized as valid Python code. This finalized text is then displayed in the "LLM Response Box". This interaction is modeled here:
-![Gemini Query App Interaction Image](./assets/Gemini-Query.png)
+## Initial Server Setup
 
-After text is displayed in the response box, a button will be made available that allows the finalized code to be copied directly to the "Python Code Editor" - the box on the lower left.
+```bash
+# 1. Create directory structure
+sudo mkdir -p /var/www/chem-llm/shared
+sudo chown -R $USER:$USER /var/www/chem-llm
 
-The "Python Code Editor" is the Monaco code editor object, thus providing a clean way for users to view the LLM generated code and edit it if necessary. The editor will accept code from other sources as well, so a user could just type in their own code or copy it from a **verified and trusted** source. 
+# 2. Clone this branch onto the server
+git clone --branch scripts \
+  https://github.com/ExecutorKarthan/Chem-LLM-Web-App.git \
+  /tmp/chem-llm-scripts
 
-To the right of the "Python Code Editor", is the "Skulpt Display". This display has a "Run Code" button to execute code that appears in the "Python Code Editor". This is done totally in the web browser, as seen in this illustration:
-![Run Code App Interaction Image](./assets/Run-Code.png)
+# 3. Copy files into place
+cp /tmp/chem-llm-scripts/chem-llm.def      /var/www/chem-llm/
+cp /tmp/chem-llm-scripts/deploy.sh         /var/www/chem-llm/
+cp /tmp/chem-llm-scripts/container_start.sh /var/www/chem-llm/
+cp /tmp/chem-llm-scripts/cron_update.sh    /var/www/chem-llm/
+cp /tmp/chem-llm-scripts/ecosystem.config.js /var/www/chem-llm/shared/
+chmod +x /var/www/chem-llm/deploy.sh
+chmod +x /var/www/chem-llm/container_start.sh
+chmod +x /var/www/chem-llm/cron_update.sh
 
-Below the "Run Code" button is a bank of buttons that each correspond to a different maze. They are organized by:
+# 4. Generate SSL key and CSR for WashU IT
+#    (replace YOUR_SUBDOMAIN with your confirmed subdomain)
+sudo openssl genrsa \
+  -out /etc/ssl/private/YOUR_SUBDOMAIN.chemistry.wustl.edu.key 2048
+sudo openssl req -new -sha256 \
+  -key /etc/ssl/private/YOUR_SUBDOMAIN.chemistry.wustl.edu.key \
+  -out /home/zhenglab/YOUR_SUBDOMAIN.chemistry.wustl.edu.csr
+# Send the .csr to WashU IT — they return a .pem certificate
+# Place it at: /etc/ssl/certs/YOUR_SUBDOMAIN.chemistry.wustl.edu.pem
 
-| Size   | Description    |
-|--------|----------------|
-| Small  | 5 x 5 grid     |
-| Medium | 10 x 10 grid   |
-| Large  | 20 x 20 grid   |
+# 5. Set up nginx (after SSL cert is in place)
+#    Fill in YOUR_SUBDOMAIN in chem-llm.conf first
+sudo cp /tmp/chem-llm-scripts/chem-llm.conf /etc/nginx/sites-available/
+sudo ln -s /etc/nginx/sites-available/chem-llm.conf /etc/nginx/sites-enabled/
+sudo nginx -t
+sudo systemctl reload nginx
 
-| Complexity | Description                                                                                                                   |
-|------------|-------------------------------------------------------------------------------------------------------------------------------|
-| Linear     | Has a direct path from the start (green) square to the ending (gold) square                                                   |
-| Branched   | Has a direct path from start (green) to ending (gold) **and** a path that dead ends                                            |
-| Gated      | Has a direct path from start (green) to ending (gold), a dead-end path, **and** a gate (black square) that blocks passage unless the turtle first touches the key (silver square) |
+# 6. Start with pm2
+cd /var/www/chem-llm
+pm2 start shared/ecosystem.config.js
+pm2 save
+pm2 startup   # run the printed command to survive reboots
 
-__Solved mazes__ - Solved mazes, one of each complexity, all medium (10 x 10) in size. Designed for user or LLM reference.                     
+# 7. Set up automatic update cron job
+crontab -e
+# Add: */5 * * * * /var/www/chem-llm/cron_update.sh >> /var/www/chem-llm/logs/cron.log 2>&1
+```
 
-When clicked, each button will populate the code needed to draw the maze in the "Python Code Editor" and cause an image of the corresponding maze to appear in the "Skulpt Display". That interaction is shown here:
-![Maze-Button App Interaction Image](./assets/Maze-button.png)
+## Zorin Testing (before touching the server)
 
-Below all the buttons, the graphical output area can be found - displaying the graphical output of the executed code in the "Python Code Editor" . 
+```bash
+# 1. Clone this branch locally
+git clone --branch scripts \
+  https://github.com/ExecutorKarthan/Chem-LLM-Web-App.git \
+  ~/chem-llm-scripts
 
-Below the graphical output area is the text output area - displaying the text output of the executed code in the "Python Code Editor".
+# 2. Create local test directory
+mkdir -p ~/chem-llm-test/shared
 
-### Django Backend Orientation
-The tokenization of the user's API key, as well as the interaction between the Gemini LLM and this app, is handled by a Python Django server. It is demonstrated here:
-![Splashgate App Interaction Image](./assets/Tokenization.png)
+# 3. Copy files
+cp ~/chem-llm-scripts/chem-llm.def       ~/chem-llm-test/
+cp ~/chem-llm-scripts/deploy.sh          ~/chem-llm-test/
+cp ~/chem-llm-scripts/container_start.sh ~/chem-llm-test/
+cp ~/chem-llm-scripts/cron_update.sh     ~/chem-llm-test/
+cp ~/chem-llm-scripts/ecosystem.config.js ~/chem-llm-test/shared/
+chmod +x ~/chem-llm-test/deploy.sh
+chmod +x ~/chem-llm-test/container_start.sh
+chmod +x ~/chem-llm-test/cron_update.sh
 
-I chose to use a server primarily for security and flexibility reasons. Handling an API key in the frontend exposes it to various security risks since the key is exposed to both the client and network traffic. The most secure way to utilize the API key without requiring a database is to create a token on the backend. Since this process is backend, it is not visible to the user nor anyone else outside of the initial API key entry. The token can then be saved in the browser, allowing the user to reload or revisit the site without needing to constantly reenter their API key. This token will expire in 90 minutes, which is generally longer than most class periods. If the user needs to securely remove the token before that, the user can clear the token by using the "clear token" button in the app or delete their browser's cache.
+# 4. Edit deploy.sh — change APP_DIR for local testing
+#    APP_DIR="$HOME/chem-llm-test"
 
-The flexibility offered by the Django server was the second reason I wanted to use it. When coding in the frontend, you are limited in your ability to log errors and respond to problems as they arise. Frontend logging is generally limited to console logs, which are stored temporarily in the user's browser. Additionally, the Django server handles long response times, model unavailability, and other errors more reliably than a frontend-only solution.  With a Django server, logs are easily available to the developer and can be set up to notify you in the event of a system failure. Additionally, if the LLM response takes a long time (enough to time-out) or a model isn't available, the Django server can address such events reliably through error-handling logic. 
+# 5. Run
+bash ~/chem-llm-test/deploy.sh
 
-Finally, the server allows me to serve static assets to the frontend. All of the previously stored code and images for the example puzzles are accessed from the Django server. This allows me to limit the size of the frontend app and perform dynamic updates to the puzzles if I need to add more options.  
+# 6. Open browser to http://localhost:8000
+```
 
-## Installation
-No installation is required. This app is hosted on Render and can be accessed through any modern web browser.
+## Placeholders Still Needed
 
-## License
-This product is protected by a [MIT License](http://choosealicense.com/licenses/mit), specifically:
-MIT License
+Search all files for `YOUR_SUBDOMAIN` and replace once WashU IT confirms your domain:
+- `deploy.sh` — `PRODUCTION_DOMAIN` variable
+- `chem-llm.conf` — `server_name` and SSL cert paths
 
-Copyright (c) [2025] [Joseph Alexander Messina]
+## Troubleshooting
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
-## Contributing
-I, Alex Messina, am the primary author of this code. Its layout and interface was designed by me with suggestions and feedback provided by the members of the Washington University - Kantaros Lab. Special thanks to Jackson Cox and Shubham Natraj for sharing their technical expertise with the educational resources produce to go along with this app. This app's creation was funded by the National Science Foundation's grant, Division of Computer and Network Systems - grant #2231257 (NSF CNS #2231257). The interface is supported by Ant Design [https://ant.design/](https://ant.design/) and its LLM interactions are handled by Google's large language Gemini models through their API [https://ai.google.dev/gemini-api/docs](https://ai.google.dev/gemini-api/docs). 
- 
-## Tests
-No automated tests have been implemented at this time.
-
-## Questions
-My GitHub username is [ExecutorKarthan](https://github.com/ExecutorKarthan) and this project can be found at [https://llm-web-app-4970.onrender.com/](https://llm-web-app-4970.onrender.com/)
-
-If you have questions or concerns about this project, please email me at me@alexmessina.dev
+| Problem | Where to look |
+|---------|--------------|
+| Container won't build | `logs/deploy.log` |
+| App crashes on start | `logs/startup.log` |
+| pm2 keeps restarting | `pm2 logs chem-llm` and `logs/pm2-err.log` |
+| nginx 502 bad gateway | App not running — check `pm2 list` |
+| CSRF / cookie errors | Check `DJANGO_DEBUG=False` in `shared/.env` |
+| RDKit viewer broken | Check `logs/startup.log` for WASM warning |
+| Auto-updates not firing | Check `logs/cron.log`; confirm `Ubuntu-Server-Deployment` branch exists |
+| Old releases piling up | deploy.sh keeps last 5 — check `ls /var/www/chem-llm/releases/` |
