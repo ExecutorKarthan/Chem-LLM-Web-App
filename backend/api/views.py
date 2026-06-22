@@ -21,6 +21,9 @@ from rest_framework import status
 from google import genai
 from google.genai.errors import ClientError, ServerError
 
+# HTTP client (for catching low-level connection errors from Gemini)
+import httpx
+
 # Set up logger
 logger = logging.getLogger(__name__)
 
@@ -284,6 +287,9 @@ def ask_gemini(request, max_retries=2, delay=2):
                 logger.info("=" * 80)
                 return Response({"error": f"Server error: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+            except (httpx.RemoteProtocolError, httpx.ConnectError, httpx.ReadError) as e:
+                logger.warning(f"[ASK_GEMINI] Network error with {model_name}: {e} — trying next model")
+                break  # move to next model
             except Exception as e:
                 logger.error(f"[ASK_GEMINI] Unexpected error: {e}", exc_info=True)
                 logger.info("=" * 80)
@@ -415,6 +421,9 @@ def prime_gemini(request, max_retries=2, delay=2):
                 logger.error(f"[PRIME_GEMINI] ServerError: {e}", exc_info=True)
                 return Response({"error": f"Server error: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+            except (httpx.RemoteProtocolError, httpx.ConnectError, httpx.ReadError) as e:
+                logger.warning(f"[PRIME_GEMINI] Network error with {model_name}: {e} — trying next model")
+                break  # move to next model
             except Exception as e:
                 logger.error(f"[PRIME_GEMINI] Unexpected error: {e}", exc_info=True)
                 return Response({"error": f"Unexpected error: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -506,6 +515,9 @@ def ask_gemini_with_data(request, max_retries=2, delay=2):
                 logger.error(f"[ASK_GEMINI_WITH_DATA] ServerError: {e}", exc_info=True)
                 return Response({"error": f"Server error: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+            except (httpx.RemoteProtocolError, httpx.ConnectError, httpx.ReadError) as e:
+                logger.warning(f"[ASK_GEMINI_WITH_DATA] Network error with {model_name}: {e} — trying next model")
+                break  # move to next model
             except Exception as e:
                 logger.error(f"[ASK_GEMINI_WITH_DATA] Unexpected error: {e}", exc_info=True)
                 return Response({"error": f"Unexpected error: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
