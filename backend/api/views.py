@@ -493,7 +493,7 @@ def ask_gemini_with_data(request, max_retries=2, delay=2):
                 logger.error(f"[ASK_GEMINI_WITH_DATA] ClientError with {model_name}: {error_message}")
                 if "API_KEY_INVALID" in error_message or "API key not valid" in error_message:
                     return Response({"error": "Invalid or unauthorized API key provided."}, status=status.HTTP_401_UNAUTHORIZED)
-                if "RESOURCE_EXHAUSTED" in error_message or "quota" in error_message.lower():\
+                if "RESOURCE_EXHAUSTED" in error_message or "quota" in error_message.lower():
                     logger.warning(f"[ASK_GEMINI_WITH_DATA] {model_name} quota exceeded, trying next model...")
                     break
                 return Response({"error": f"Client error with {model_name}: {error_message}"}, status=status.HTTP_400_BAD_REQUEST)
