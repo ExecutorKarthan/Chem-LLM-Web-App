@@ -91,10 +91,13 @@ CSRF_COOKIE_SECURE = not DEBUG
 
 ############################################
 # Cache
+# File-based so tokens survive Gunicorn worker restarts.
+# LocMemCache is per-process and loses all tokens if a worker dies.
 ############################################
 CACHES = {
     "default": {
-        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        "BACKEND": "django.core.cache.backends.filebased.FileBasedCache",
+        "LOCATION": os.environ.get("DJANGO_CACHE_DIR", "/tmp/django_cache"),
     }
 }
 

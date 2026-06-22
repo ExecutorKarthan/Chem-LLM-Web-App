@@ -319,7 +319,7 @@ def load_mof_csv():
         )
 
     rows = []
-    with open(MOF_CSV_PATH, newline="", encoding="utf-8-sig") as f:  # utf-8-sig strips BOM from Windows-saved CSVs
+    with open(MOF_CSV_PATH, newline="", encoding="utf-8-sig") as f:
         reader = csv.DictReader(f)
         headers = reader.fieldnames
         if not headers:
