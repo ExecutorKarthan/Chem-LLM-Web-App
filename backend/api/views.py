@@ -5,10 +5,11 @@ import uuid
 import json
 import logging
 import csv
+from pathlib import Path
 
 # Django / DRF imports
 from django.conf import settings
-from django.http import JsonResponse
+from django.http import JsonResponse, HttpResponse
 from django.views.decorators.csrf import csrf_exempt, ensure_csrf_cookie
 from django.core.cache import cache
 from django.middleware.csrf import get_token
@@ -548,3 +549,78 @@ def clear_token(request):
     logger.info("[CLEAR_TOKEN] Cookie deleted from response")
     logger.info("=" * 80)
     return response
+
+
+############################################
+# Serve MOF renderer Python source to Skulpt
+# ──────────────────────────────────────────
+# Skulpt runs Python in the browser and needs the actual .py source text
+# for any module the generated code imports (e.g. `from mof_renderer
+# import MOFRenderer`). We keep these files on the backend only — this
+# endpoint serves them as plain text by filename, restricted to a fixed
+# whitelist so arbitrary file paths can never be requested.
+############################################
+MOF_ENGINE_DIR = Path(__file__).resolve().parent / "mof_engine"
+
+MOF_ENGINE_WHITELIST = {
+    "smiles_lexer.py",
+    "smiles_parser.py",
+    "ring_utils.py",
+    "ring_layout.py",
+    "coordination_geometry.py",
+    "layout_engine.py",
+    "turtle_renderer.py",
+    "mof_renderer.py",
+}
+
+
+@api_view(["GET"])
+def get_mof_engine_file(request, filename):
+    """
+    Serve one whitelisted .py source file as plain text.
+    Used by the frontend's Skulpt `read()` callback so the browser-side
+    Python interpreter can resolve `import` statements in the generated
+    MOF-drawing code without the source ever being bundled client-side.
+    """
+    if filename not in MOF_ENGINE_WHITELIST:
+        logger.warning(f"[MOF_ENGINE] Rejected non-whitelisted filename: {filename}")
+        return JsonResponse({"error": "File not found"}, status=404)
+
+    file_path = MOF_ENGINE_DIR / filename
+
+    if not file_path.is_file():
+        logger.error(f"[MOF_ENGINE] Whitelisted file missing on disk: {file_path}")
+        return JsonResponse({"error": "File not found"}, status=404)
+
+    try:
+        content = file_path.read_text(encoding="utf-8")
+    except Exception as e:
+        logger.error(f"[MOF_ENGINE] Failed to read {filename}: {e}", exc_info=True)
+        return JsonResponse({"error": "Failed to read file"}, status=500)
+
+    return HttpResponse(content, content_type="text/plain; charset=utf-8")
+
+
+############################################
+# Serve MOF_data.csv (pore size lookup table)
+# ──────────────────────────────────────────
+# mof_renderer.py expects MOF_DB to be embedded in its own source, so this
+# endpoint isn't required for normal operation — kept here only in case a
+# future version of mof_renderer.py is changed to load the CSV at runtime
+# instead of embedding it.
+############################################
+@api_view(["GET"])
+def get_mof_data_csv(request):
+    csv_path = Path(settings.BASE_DIR) / "assets" / "MOF_data.csv"
+
+    if not csv_path.is_file():
+        logger.error(f"[MOF_DATA_CSV] File missing: {csv_path}")
+        return JsonResponse({"error": "MOF_data.csv not found", "csv_missing": True}, status=404)
+
+    try:
+        content = csv_path.read_text(encoding="utf-8-sig")
+    except Exception as e:
+        logger.error(f"[MOF_DATA_CSV] Failed to read: {e}", exc_info=True)
+        return JsonResponse({"error": "Failed to read MOF_data.csv"}, status=500)
+
+    return HttpResponse(content, content_type="text/csv; charset=utf-8")

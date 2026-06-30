@@ -3,10 +3,12 @@ import { useState } from "react";
 import axios from "axios";
 import LLMEntryBox from "./LLMEntryBox.js";
 import LLMResponseBox from "./LLMResponseBox.js";
-import { Row, Col } from "antd";
+import { Row, Col, Switch } from "antd";
 import { BACKEND_URL } from "../config.js";
 import SmilesInput from "./SMILESInput.js";
 import MoleculeViewer from "./MoleculeViewer.js";
+import MOFInput from "./MOFInput.js";
+import SkulptDisplay from "./SkulptDisplay.js";
 
 // Helper function to get CSRF token from cookies
 function getCookie(name: string): string | undefined {
@@ -28,6 +30,8 @@ const ChemApp = () => {
   const [loading, setLoading] = useState<boolean>(false);
   const [submittedSmiles, setSubmittedSmiles] = useState<string[]>([]);
   const [submittedSubstructure, setSubmittedSubstructure] = useState<string>("");
+  const [mofMode, setMofMode] = useState<boolean>(false);
+  const [mofCode, setMofCode] = useState<string>("");
 
   const beginRequest = () => {
     setLoading(true);
@@ -151,20 +155,41 @@ const ChemApp = () => {
         </Col>
       </Row>
 
-      {/* ── Row 2: SMILES Input | Molecule Viewer ── */}
+      {/* ── Mode toggle ── */}
+      <Row justify="center" style={{ marginBottom: 8 }}>
+        <Col xs={24} style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 10 }}>
+          <span style={{ fontSize: 13, color: mofMode ? "#aaa" : "#333", fontWeight: 500 }}>
+            Molecule Viewer
+          </span>
+          <Switch checked={mofMode} onChange={setMofMode} />
+          <span style={{ fontSize: 13, color: mofMode ? "#333" : "#aaa", fontWeight: 500 }}>
+            MOF Pore Explorer
+          </span>
+        </Col>
+      </Row>
+
+      {/* ── Row 2: SMILES Input | Molecule Viewer  —or—  MOF Input | Skulpt Display ── */}
       <Row gutter={[16, 16]} justify="center" wrap>
         <Col
           xs={24}
           md={12}
           style={colStyle({ minHeight: 350, display: "flex", flexDirection: "column" })}
         >
-          <SmilesInput onSubmitSmiles={handleSubmitSmiles} />
+          {mofMode ? (
+            <MOFInput onGenerateCode={setMofCode} />
+          ) : (
+            <SmilesInput onSubmitSmiles={handleSubmitSmiles} />
+          )}
         </Col>
         <Col xs={24} md={12} style={colStyle({ overflowY: "auto" })}>
-          <MoleculeViewer
-            smiles={submittedSmiles}
-            substructure={submittedSubstructure}
-          />
+          {mofMode ? (
+            <SkulptDisplay code={mofCode} />
+          ) : (
+            <MoleculeViewer
+              smiles={submittedSmiles}
+              substructure={submittedSubstructure}
+            />
+          )}
         </Col>
       </Row>
     </>
