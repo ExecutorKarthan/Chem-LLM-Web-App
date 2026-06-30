@@ -158,12 +158,12 @@ const ChemApp = () => {
       {/* ── Mode toggle ── */}
       <Row justify="center" style={{ marginBottom: 8 }}>
         <Col xs={24} style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 10 }}>
-          <span style={{ fontSize: 13, color: mofMode ? "#aaa" : "#333", fontWeight: 500 }}>
-            Molecule Viewer
+          <span style={{ fontSize: 13, color: mofMode ? "#333" : "#aaa", fontWeight: 500 }}>
+            MOF Explorer
           </span>
           <Switch checked={mofMode} onChange={setMofMode} />
-          <span style={{ fontSize: 13, color: mofMode ? "#333" : "#aaa", fontWeight: 500 }}>
-            MOF Pore Explorer
+          <span style={{ fontSize: 13, color: mofMode ? "#aaa" : "#333", fontWeight: 500 }}>
+            Linker Viewer
           </span>
         </Col>
       </Row>
@@ -176,19 +176,19 @@ const ChemApp = () => {
           style={colStyle({ minHeight: 350, display: "flex", flexDirection: "column" })}
         >
           {mofMode ? (
-            <MOFInput onGenerateCode={setMofCode} />
-          ) : (
             <SmilesInput onSubmitSmiles={handleSubmitSmiles} />
+          ) : (
+            <MOFInput onGenerateCode={setMofCode} />
           )}
         </Col>
         <Col xs={24} md={12} style={colStyle({ overflowY: "auto" })}>
           {mofMode ? (
-            <SkulptDisplay code={mofCode} />
-          ) : (
             <MoleculeViewer
               smiles={submittedSmiles}
               substructure={submittedSubstructure}
             />
+          ) : (
+            <SkulptDisplay code={mofCode} />
           )}
         </Col>
       </Row>

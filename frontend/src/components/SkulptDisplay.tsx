@@ -113,16 +113,41 @@ const SkulptDisplay: React.FC<SkulptDisplayProps> = ({ code }) => {
         document.body.appendChild(script);
       });
 
-    (async () => {
+ const loadWithFallback = async (urls: string[]) => {
+    let lastError;
+
+    for (const url of urls) {
       try {
-        await loadScript("https://cdn.jsdelivr.net/npm/skulpt/dist/skulpt.min.js");
-        await loadScript("https://cdn.jsdelivr.net/npm/skulpt/dist/skulpt-stdlib.js");
-        setSkulptLoaded(true);
+        console.log(`Loading ${url}`);
+        await loadScript(url);
+        return;
       } catch (err) {
-        console.error(err);
+        console.warn(`Failed ${url}`);
+        lastError = err;
       }
-    })();
-  }, []);
+    }
+
+    throw lastError;
+  };
+
+  (async () => {
+    try {
+      await loadWithFallback([
+        "https://unpkg.com/skulpt/dist/skulpt.min.js",
+        "https://cdn.jsdelivr.net/npm/skulpt/dist/skulpt.min.js",
+      ]);
+
+      await loadWithFallback([
+        "https://unpkg.com/skulpt/dist/skulpt-stdlib.js",
+        "https://cdn.jsdelivr.net/npm/skulpt/dist/skulpt-stdlib.js",
+      ]);
+
+      setSkulptLoaded(true);
+    } catch (err) {
+      console.error("Unable to load Skulpt from any CDN:", err);
+    }
+  })();
+}, []);
 
   // builtinRead: Skulpt stdlib files use this normally; we intercept
   // requests for our own modules and route them to the backend instead.
