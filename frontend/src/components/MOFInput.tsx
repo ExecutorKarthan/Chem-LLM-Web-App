@@ -1,22 +1,20 @@
 // MOFInput.tsx
 //
-// Left-panel input for the MOF pore-fit visualizer. Collects metal symbol,
-// metal charge, linker SMILES, and (optionally) a guest ion, then builds
-// the Python source string that SkulptDisplay executes via Skulpt/turtle.
-//
-// The generated code imports MOFRenderer from our backend-served
-// mof_renderer.py (see SkulptDisplay's builtinRead / MOF_ENGINE_MODULES).
+// Left-panel input for the MOF pore-fit visualizer.
+// Sends metal / charge / linker / guest to the Django backend
+// (POST /api/mof-generate/) which validates inputs and returns
+// ready-to-run Python turtle source for SkulptDisplay to execute.
 
 import React, { useState } from "react";
-import { Input, InputNumber, Select, Button, Switch, Tooltip } from "antd";
+import { Input, InputNumber, Select, Button, Switch, Tooltip, Alert } from "antd";
 import { QuestionCircleOutlined } from "@ant-design/icons";
+import axios from "axios";
+import { BACKEND_URL } from "../config.js";
 
 interface MOFInputProps {
-  onGenerateCode: (code: string) => void;
+  onCodeReady: (code: string) => void;
 }
 
-// Ions present in mof_renderer.py's ION_RADII table. Keeping this in sync
-// lets the dropdown only offer ions the renderer can actually look up.
 const GUEST_IONS = [
   "Li+", "Na+", "K+", "Rb+", "Cs+",
   "Be2+", "Mg2+", "Ca2+", "Sr2+", "Ba2+",
@@ -34,63 +32,66 @@ const COMMON_METALS = ["Zn", "Cu", "Fe", "Co", "Ni", "Mn", "Cd", "Al", "Cr", "Mg
 
 const EXAMPLE_LINKERS: Record<string, string> = {
   "Terephthalate (BDC)": "[O-]C(=O)c1ccc(cc1)C(=O)[O-]",
-  "Trimesate (BTC)": "[O-]C(=O)c1cc(cc(c1)C(=O)[O-])C(=O)[O-]",
-  "Fumarate": "[O-]C(=O)C=CC(=O)[O-]",
+  "Trimesate (BTC)":     "[O-]C(=O)c1cc(cc(c1)C(=O)[O-])C(=O)[O-]",
+  "Fumarate":            "[O-]C(=O)C=CC(=O)[O-]",
 };
 
-const MOFInput: React.FC<MOFInputProps> = ({ onGenerateCode }) => {
-  const [metal, setMetal] = useState<string>("Zn");
-  const [charge, setCharge] = useState<number>(2);
-  const [linker, setLinker] = useState<string>(EXAMPLE_LINKERS["Terephthalate (BDC)"]);
-  const [guestIon, setGuestIon] = useState<string | undefined>("Na+");
+const MOFInput: React.FC<MOFInputProps> = ({ onCodeReady }) => {
+  const [metal, setMetal]         = useState<string>("Zn");
+  const [charge, setCharge]       = useState<number>(2);
+  const [linker, setLinker]       = useState<string>(EXAMPLE_LINKERS["Terephthalate (BDC)"]);
+  const [guestIon, setGuestIon]   = useState<string | undefined>("Na+");
   const [simpleMode, setSimpleMode] = useState<boolean>(false);
   const [showGuest, setShowGuest] = useState<boolean>(true);
+  const [loading, setLoading]     = useState<boolean>(false);
+  const [error, setError]         = useState<string | null>(null);
 
-  const buildPythonCode = (): string => {
-    const safeLinker = linker.trim().replace(/"/g, '\\"');
-    const guestArg = showGuest && guestIon ? `"${guestIon}"` : "None";
-
-    const drawMethod = simpleMode
-      ? (showGuest ? "draw_simple_with_guest" : "draw_simple_without_guest")
-      : (showGuest ? "draw_with_guest" : "draw_without_guest");
-
-    return [
-      "import turtle",
-      "from mof_renderer import MOFRenderer",
-      "",
-      "screen = turtle.Screen()",
-      "screen.tracer(0)",
-      "t = turtle.Turtle()",
-      "t.speed(0)",
-      "t.hideturtle()",
-      "",
-      `renderer = MOFRenderer(`,
-      `    t,`,
-      `    metal="${metal.trim()}",`,
-      `    linker_smiles="${safeLinker}",`,
-      `    cx=0, cy=0, scale=1.0,`,
-      `    metal_charge=${charge},`,
-      `    guest_ion=${guestArg},`,
-      `)`,
-      `renderer.${drawMethod}()`,
-      "",
-      "screen.update()",
-    ].join("\n");
-  };
-
-  const handleDraw = () => {
+  const handleGenerate = async () => {
     if (!metal.trim() || !linker.trim()) return;
-    onGenerateCode(buildPythonCode());
+    setLoading(true);
+    setError(null);
+
+    try {
+      const res = await axios.post(
+        `${BACKEND_URL}/api/mof-generate/`,
+        {
+          metal:         metal.trim(),
+          charge,
+          linker_smiles: linker.trim(),
+          guest_ion:     showGuest ? (guestIon ?? null) : null,
+          show_guest:    showGuest,
+          simple_mode:   simpleMode,
+        },
+        { withCredentials: true }
+      );
+      onCodeReady(res.data.code);
+    } catch (err: unknown) {
+      let msg = "Failed to generate MOF code.";
+      if (axios.isAxiosError(err) && err.response?.data?.error) {
+        msg = err.response.data.error;
+      }
+      setError(msg);
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
     <div style={{ width: "100%", display: "flex", flexDirection: "column", gap: 14 }}>
-      <h3 style={{ margin: "0 0 4px 0" }}>MOF Pore Explorer</h3>
+      <h3 style={{ margin: "0 0 4px 0" }}>MOF Explorer</h3>
 
+      {error && (
+        <Alert
+          type="error"
+          message={error}
+          closable
+          onClose={() => setError(null)}
+        />
+      )}
+
+      {/* Metal symbol */}
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-        <span style={{ fontSize: 12, color: "#888", fontWeight: 500 }}>
-          Metal symbol
-        </span>
+        <span style={{ fontSize: 12, color: "#888", fontWeight: 500 }}>Metal symbol</span>
         <Select
           showSearch
           value={metal}
@@ -101,10 +102,9 @@ const MOFInput: React.FC<MOFInputProps> = ({ onGenerateCode }) => {
         />
       </div>
 
+      {/* Metal charge */}
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-        <span style={{ fontSize: 12, color: "#888", fontWeight: 500 }}>
-          Metal charge
-        </span>
+        <span style={{ fontSize: 12, color: "#888", fontWeight: 500 }}>Metal charge</span>
         <InputNumber
           value={charge}
           onChange={(v) => setCharge(v ?? 2)}
@@ -114,6 +114,7 @@ const MOFInput: React.FC<MOFInputProps> = ({ onGenerateCode }) => {
         />
       </div>
 
+      {/* Linker SMILES */}
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
         <span style={{ fontSize: 12, color: "#888", fontWeight: 500 }}>
           Linker SMILES{" "}
@@ -137,22 +138,12 @@ const MOFInput: React.FC<MOFInputProps> = ({ onGenerateCode }) => {
         </div>
       </div>
 
-      <div
-        style={{
-          borderTop: "1px solid #eee",
-          paddingTop: 12,
-          display: "flex",
-          flexDirection: "column",
-          gap: 6,
-        }}
-      >
+      {/* Guest ion */}
+      <div style={{ borderTop: "1px solid #eee", paddingTop: 12, display: "flex", flexDirection: "column", gap: 6 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <span style={{ fontSize: 12, fontWeight: 500, color: "#555" }}>
-            Show guest ion
-          </span>
+          <span style={{ fontSize: 12, fontWeight: 500, color: "#555" }}>Show guest ion</span>
           <Switch checked={showGuest} onChange={setShowGuest} size="small" />
         </div>
-
         {showGuest && (
           <Select
             showSearch
@@ -164,38 +155,29 @@ const MOFInput: React.FC<MOFInputProps> = ({ onGenerateCode }) => {
           />
         )}
         <span style={{ fontSize: 11, color: "#bbb", lineHeight: 1.4 }}>
-          The hydration shell radius is compared against the MOF's real pore
-          limiting diameter (from MOF_data.csv) to determine fit.
+          Hydration shell radius is compared against the MOF's real pore limiting
+          diameter (from MOF_data.csv) to determine fit.
         </span>
       </div>
 
-      <div
-        style={{
-          borderTop: "1px solid #eee",
-          paddingTop: 12,
-          display: "flex",
-          alignItems: "center",
-          gap: 10,
-        }}
-      >
-        <span style={{ fontSize: 12, fontWeight: 500, color: "#555" }}>
-          Simple line view
-        </span>
+      {/* Simple mode toggle */}
+      <div style={{ borderTop: "1px solid #eee", paddingTop: 12, display: "flex", alignItems: "center", gap: 10 }}>
+        <span style={{ fontSize: 12, fontWeight: 500, color: "#555" }}>Simple line view</span>
         <Switch checked={simpleMode} onChange={setSimpleMode} size="small" />
         <span style={{ fontSize: 11, color: "#bbb" }}>
-          {simpleMode
-            ? "Plain lines for linkers (faster, cleaner)"
-            : "Full ball-and-stick linker structures"}
+          {simpleMode ? "Plain lines (faster)" : "Ball-and-stick linkers"}
         </span>
       </div>
 
+      {/* Submit */}
       <Button
         type="primary"
-        onClick={handleDraw}
+        onClick={handleGenerate}
+        loading={loading}
         disabled={!metal.trim() || !linker.trim()}
         style={{ alignSelf: "flex-start" }}
       >
-        Generate MOF
+        {loading ? "Generating..." : "Generate MOF"}
       </Button>
     </div>
   );

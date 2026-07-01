@@ -178,7 +178,7 @@ const ChemApp = () => {
           {mofMode ? (
             <SmilesInput onSubmitSmiles={handleSubmitSmiles} />
           ) : (
-            <MOFInput onGenerateCode={setMofCode} />
+            <MOFInput onCodeReady={setMofCode} />
           )}
         </Col>
         <Col xs={24} md={12} style={colStyle({ overflowY: "auto" })}>

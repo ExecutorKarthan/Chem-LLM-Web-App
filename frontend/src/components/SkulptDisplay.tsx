@@ -7,7 +7,7 @@
 // frontend build. The backend whitelist lives in api/views.py
 // (get_mof_engine_file).
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState, useCallback } from "react";
 import { BACKEND_URL } from "../config.js";
 
 interface SkulptDisplayProps {
@@ -95,6 +95,16 @@ const SkulptDisplay: React.FC<SkulptDisplayProps> = ({ code }) => {
   const [skulptLoaded, setSkulptLoaded] = useState(false);
   const [running, setRunning] = useState(false);
 
+  // Auto-run whenever the parent pushes new code down
+  const prevCodeRef = React.useRef<string>("");
+  React.useEffect(() => {
+    if (code && code !== prevCodeRef.current && skulptLoaded) {
+      prevCodeRef.current = code;
+      runCode();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [code, skulptLoaded]);
+
   // Load Skulpt from CDN once
   useEffect(() => {
     if (window.Sk) {
@@ -113,41 +123,16 @@ const SkulptDisplay: React.FC<SkulptDisplayProps> = ({ code }) => {
         document.body.appendChild(script);
       });
 
- const loadWithFallback = async (urls: string[]) => {
-    let lastError;
-
-    for (const url of urls) {
+    (async () => {
       try {
-        console.log(`Loading ${url}`);
-        await loadScript(url);
-        return;
+        await loadScript("https://cdn.jsdelivr.net/npm/skulpt/dist/skulpt.min.js");
+        await loadScript("https://cdn.jsdelivr.net/npm/skulpt/dist/skulpt-stdlib.js");
+        setSkulptLoaded(true);
       } catch (err) {
-        console.warn(`Failed ${url}`);
-        lastError = err;
+        console.error(err);
       }
-    }
-
-    throw lastError;
-  };
-
-  (async () => {
-    try {
-      await loadWithFallback([
-        "https://unpkg.com/skulpt/dist/skulpt.min.js",
-        "https://cdn.jsdelivr.net/npm/skulpt/dist/skulpt.min.js",
-      ]);
-
-      await loadWithFallback([
-        "https://unpkg.com/skulpt/dist/skulpt-stdlib.js",
-        "https://cdn.jsdelivr.net/npm/skulpt/dist/skulpt-stdlib.js",
-      ]);
-
-      setSkulptLoaded(true);
-    } catch (err) {
-      console.error("Unable to load Skulpt from any CDN:", err);
-    }
-  })();
-}, []);
+    })();
+  }, []);
 
   // builtinRead: Skulpt stdlib files use this normally; we intercept
   // requests for our own modules and route them to the backend instead.
