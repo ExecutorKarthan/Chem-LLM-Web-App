@@ -78,7 +78,7 @@ const MOFInput: React.FC<MOFInputProps> = ({ onCodeReady }) => {
 
   return (
     <div style={{ width: "100%", display: "flex", flexDirection: "column", gap: 14 }}>
-      <h3 style={{ margin: "0 0 4px 0" }}>MOF Explorer</h3>
+      <h3 style={{ margin: "0 0 4px 0" }}>MOF Input</h3>
 
       {error && (
         <Alert

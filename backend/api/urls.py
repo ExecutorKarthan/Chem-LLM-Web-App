@@ -19,7 +19,6 @@ urlpatterns = [
     # MOF engine
     path("api/mof-generate/", api_views.generate_mof_code),
     path("api/mof-engine/<str:filename>", api_views.get_mof_engine_file),
-    path("api/mof-data-csv/", api_views.get_mof_data_csv),
 
     # Root route -> React
     path("", frontend),

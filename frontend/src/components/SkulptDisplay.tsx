@@ -59,6 +59,7 @@ const MOF_ENGINE_MODULES = new Set([
   "layout_engine",
   "turtle_renderer",
   "mof_renderer",
+  "mof_data",
 ]);
 
 // Cache fetched source so re-running code doesn't re-fetch every module
@@ -136,23 +137,40 @@ const SkulptDisplay: React.FC<SkulptDisplayProps> = ({ code }) => {
 
   // builtinRead: Skulpt stdlib files use this normally; we intercept
   // requests for our own modules and route them to the backend instead.
-  const builtinRead = (filename: string): string => {
-    // Skulpt requests files like "src/lib/mof_renderer.js" or just the
-    // raw module name depending on context — match on the base module
-    // name with a .py extension stripped, against our whitelist.
-    const baseName = filename
-      .replace(/^.*\//, "")
-      .replace(/\.(py|js)$/, "");
+  
+const builtinRead = (filename: string): string => {
+  console.log("Skulpt requested:", filename);
 
+  // 1. If Skulpt is checking for a JS wrapper for your custom module, 
+  // do NOT return Python code. Tell Skulpt it doesn't exist so it looks for the .py file.
+  if (filename.endsWith(".js")) {
+    const baseName = filename.replace(/^.*\//, "").replace(/\.js$/, "");
     if (MOF_ENGINE_MODULES.has(baseName)) {
-      return fetchMofEngineFileSync(baseName);
+      throw new Error(`No JS implementation for ${baseName}`);
     }
+  }
 
-    if (!window.Sk.builtinFiles || !window.Sk.builtinFiles["files"][filename]) {
-      throw new Error(`File not found: '${filename}'`);
-    }
-    return window.Sk.builtinFiles["files"][filename];
-  };
+  // 2. Only intercept and fetch from your backend if it's explicitly a .py file
+  const baseName = filename.replace(/^.*\//, "").replace(/\.(py|js)$/, "");
+
+  if (filename.endsWith(".py") && MOF_ENGINE_MODULES.has(baseName)) {
+    const source = fetchMofEngineFileSync(baseName);
+
+    console.log("==========");
+    console.log(baseName);
+    console.log(source.substring(0, 500));
+    console.log("==========");
+
+    return source;
+  }
+
+  // Fallback to Skulpt's standard library
+  if (!window.Sk.builtinFiles || !window.Sk.builtinFiles["files"][filename]) {
+    throw new Error(`File not found: '${filename}'`);
+  }
+
+  return window.Sk.builtinFiles["files"][filename];
+};
 
   const outf = (text: string) => {
     setOutputText((prev) => prev + text);
@@ -189,6 +207,15 @@ const SkulptDisplay: React.FC<SkulptDisplayProps> = ({ code }) => {
         target: canvasRef.current,
         width,
         height,
+      };
+
+// We explicitly lock down Skulpt's canvas targeting settings here.
+      window.Sk.TurtleGraphics = {
+        target: canvasRef.current,
+        width: width,
+        height: height,
+        // Pro-tip: If things look offset, adding these tells Skulpt's underlying 
+        // engine to center the coordinate context (0,0) exactly in the container midpoints.
       };
 
       window.Sk.misceval

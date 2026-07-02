@@ -552,7 +552,148 @@ def clear_token(request):
 
 
 ############################################
-# Serve MOF renderer Python source to Skulpt
+# Generate MOF-drawing Python source server-side
+# ──────────────────────────────────────────
+# React sends the form values (metal, charge, linker SMILES, guest ion,
+# display options); this endpoint validates them against the same data
+# the renderer itself uses (ION_RADII, basic element/SMILES sanity checks)
+# and returns ready-to-run Python source for SkulptDisplay to execute.
+#
+# Code generation lives here rather than in React so that:
+#   - invalid inputs are rejected before any Skulpt execution is attempted
+#   - the set of valid guest ions / draw modes is defined in one place
+#     (this file), matching mof_renderer.py's own ION_RADII table
+############################################
+import re as _re
+
+# Mirrors mof_renderer.py's ION_RADII keys. Kept here (not imported, since
+# mof_renderer.py isn't installed as a backend package) so invalid ion
+# names are rejected with a clear error instead of failing inside Skulpt.
+VALID_GUEST_IONS = {
+    "Li+", "Na+", "K+", "Rb+", "Cs+",
+    "Be2+", "Mg2+", "Ca2+", "Sr2+", "Ba2+",
+    "Cu+", "Cu2+", "Zn2+", "Ni2+", "Co2+", "Co3+",
+    "Mn2+", "Mn3+", "Mn4+", "Mn7+",
+    "Fe2+", "Fe3+", "Cr2+", "Cr3+", "Cr6+",
+    "Ti2+", "Ti3+", "Ti4+", "V2+", "V3+", "V4+", "V5+",
+    "Al3+", "Ga3+", "In3+", "Sn2+", "Sn4+", "Pb2+", "Pb4+",
+    "Sc3+", "Y3+", "La3+", "Ce3+", "Ce4+", "Nd3+", "Gd3+", "Lu3+",
+    "Ac3+", "Th4+", "Pa4+", "Pa5+", "U3+", "U4+", "U6+",
+    "Np3+", "Np4+", "Pu3+", "Pu4+", "Am3+", "Am4+",
+}
+
+# Loose SMILES character whitelist — just enough to block anything that
+# could break out of the generated Python string literal or inject code.
+# Real SMILES validity is still checked by smiles_parser.py inside Skulpt.
+_SMILES_SAFE_RE = _re.compile(r'^[A-Za-z0-9\[\]\(\)\+\-=#@/\\.%]+$')
+
+# Element symbols are 1-2 chars, first letter uppercase.
+_METAL_SYMBOL_RE = _re.compile(r'^[A-Z][a-z]?$')
+
+
+@api_view(["POST"])
+def generate_mof_code(request):
+    """
+    Body: {
+        "metal": "Zn",
+        "charge": 2,
+        "linker_smiles": "[O-]C(=O)c1ccc(cc1)C(=O)[O-]",
+        "guest_ion": "Na+" | null,
+        "show_guest": true,
+        "simple_mode": false
+    }
+    Returns: { "code": "<python source>" }
+    """
+    data = request.data
+
+    metal = str(data.get("metal", "")).strip()
+    linker_smiles = str(data.get("linker_smiles", "")).strip()
+    guest_ion = data.get("guest_ion")
+    show_guest = bool(data.get("show_guest", True))
+    simple_mode = bool(data.get("simple_mode", False))
+
+    try:
+        charge = int(data.get("charge", 2))
+    except (TypeError, ValueError):
+        return Response({"error": "Metal charge must be an integer."},
+                        status=status.HTTP_400_BAD_REQUEST)
+
+    # ── Validate metal symbol ──────────────────────────────────────────
+    if not metal:
+        return Response({"error": "Metal symbol is required."},
+                        status=status.HTTP_400_BAD_REQUEST)
+    if not _METAL_SYMBOL_RE.match(metal):
+        return Response(
+            {"error": f"'{metal}' is not a valid element symbol (e.g. Zn, Cu, Fe)."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # ── Validate charge range ──────────────────────────────────────────
+    if not (1 <= charge <= 7):
+        return Response({"error": "Metal charge must be between 1 and 7."},
+                        status=status.HTTP_400_BAD_REQUEST)
+
+    # ── Validate linker SMILES ─────────────────────────────────────────
+    if not linker_smiles:
+        return Response({"error": "Linker SMILES is required."},
+                        status=status.HTTP_400_BAD_REQUEST)
+    if len(linker_smiles) > 200:
+        return Response({"error": "Linker SMILES is too long."},
+                        status=status.HTTP_400_BAD_REQUEST)
+    if not _SMILES_SAFE_RE.match(linker_smiles):
+        return Response(
+            {"error": "Linker SMILES contains characters that aren't valid in SMILES notation."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # ── Validate guest ion ──────────────────────────────────────────────
+    guest_ion_clean = None
+    if show_guest and guest_ion:
+        guest_ion_clean = str(guest_ion).strip()
+        if guest_ion_clean not in VALID_GUEST_IONS:
+            return Response(
+                {"error": f"'{guest_ion_clean}' is not a recognized guest ion."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+    # ── Build the draw method name ──────────────────────────────────────
+    has_guest = bool(guest_ion_clean)
+    if simple_mode:
+        draw_method = "draw_simple_with_guest" if has_guest else "draw_simple_without_guest"
+    else:
+        draw_method = "draw_with_guest" if has_guest else "draw_without_guest"
+
+    guest_literal = f'"{guest_ion_clean}"' if guest_ion_clean else "None"
+
+    code = "\n".join([
+        "import turtle",
+        "from mof_renderer import MOFRenderer",
+        "",
+        "screen = turtle.Screen()",
+        "screen.tracer(0)",
+        "t = turtle.Turtle()",
+        "t.speed(0)",
+        "t.hideturtle()",
+        "",
+        "renderer = MOFRenderer(",
+        "    t,",
+        f'    metal="{metal}",',
+        f'    linker_smiles="{linker_smiles}",',
+        "    cx=0, cy=0, scale=1.0,",
+        f"    metal_charge={charge},",
+        f"    guest_ion={guest_literal},",
+        ")",
+        f"renderer.{draw_method}()",
+        "",
+        "screen.update()",
+    ])
+
+    logger.info(f"[MOF_GENERATE_CODE] metal={metal} charge={charge} "
+                f"guest={guest_ion_clean} simple={simple_mode}")
+
+    return Response({"code": code}, status=status.HTTP_200_OK)
+
+
 # ──────────────────────────────────────────
 # Skulpt runs Python in the browser and needs the actual .py source text
 # for any module the generated code imports (e.g. `from mof_renderer
@@ -571,6 +712,7 @@ MOF_ENGINE_WHITELIST = {
     "layout_engine.py",
     "turtle_renderer.py",
     "mof_renderer.py",
+    "mof_data.py",  # generated from MOF_data.csv — see below, not a real file on disk
 }
 
 
@@ -581,10 +723,26 @@ def get_mof_engine_file(request, filename):
     Used by the frontend's Skulpt `read()` callback so the browser-side
     Python interpreter can resolve `import` statements in the generated
     MOF-drawing code without the source ever being bundled client-side.
+
+    `mof_data.py` is a special case: it isn't a real file in mof_engine/,
+    it's generated on the fly from api/assets/MOF_data.csv (see
+    _get_mof_data_source below), so mof_renderer.py's `MOF_DB` table can
+    be updated by editing the CSV instead of redeploying code.
     """
     if filename not in MOF_ENGINE_WHITELIST:
         logger.warning(f"[MOF_ENGINE] Rejected non-whitelisted filename: {filename}")
         return JsonResponse({"error": "File not found"}, status=404)
+
+    if filename == "mof_data.py":
+        try:
+            content = _get_mof_data_source()
+        except FileNotFoundError as e:
+            logger.error(f"[MOF_ENGINE] {e}")
+            return JsonResponse({"error": "File not found"}, status=404)
+        except Exception as e:
+            logger.error(f"[MOF_ENGINE] Failed to generate mof_data.py: {e}", exc_info=True)
+            return JsonResponse({"error": "Failed to read file"}, status=500)
+        return HttpResponse(content, content_type="text/plain; charset=utf-8")
 
     file_path = MOF_ENGINE_DIR / filename
 
@@ -602,23 +760,95 @@ def get_mof_engine_file(request, filename):
 
 
 ############################################
-# Serve MOF_data.csv (pore size lookup table)
+# mof_data.py generation (from api/assets/MOF_data.csv)
 # ──────────────────────────────────────────
-# mof_renderer.py expects MOF_DB to be embedded in its own source, so this
-# endpoint isn't required for normal operation — kept here only in case a
-# future version of mof_renderer.py is changed to load the CSV at runtime
-# instead of embedding it.
+# mof_renderer.py runs client-side in Skulpt, which has no filesystem —
+# it can't read the CSV itself. So Django reads MOF_data.csv here and
+# turns it into a plain `MOF_DB = {...}` Python module, served above
+# through the same whitelisted-module mechanism as the other engine
+# files. mof_renderer.py just does `from mof_data import MOF_DB`.
+#
+# The CSV (900+ rows) is only actually parsed once per worker process:
+# the generated source is kept in a module-level in-memory cache, and
+# re-parsed only if the CSV's mtime changes (a cheap stat() check on
+# every request) — so editing the CSV takes effect on the next request,
+# with no code change or redeploy needed, and no per-request parsing
+# cost in the common case.
+############################################
+MOF_DATA_CSV_PATH = Path(__file__).resolve().parent.parent / "assets" / "MOF_data.csv"
+
+# Expected CSV columns: mof_id, lcd_ang, pld_ang, metal
+# (mof_id is the same composite linker+metal identifier string that was
+# previously used as the MOF_DB dict key; metal may be comma-separated,
+# e.g. "In,Ag", exactly as _lookup_mof() in mof_renderer.py expects.)
+_mof_data_cache = {"mtime": None, "source": None}
+
+
+def _build_mof_data_source():
+    """Read MOF_data.csv from disk and return generated `mof_data.py` source."""
+    rows = []
+    with MOF_DATA_CSV_PATH.open(encoding="utf-8-sig", newline="") as f:
+        reader = csv.DictReader(f)
+        # --- ADD THIS DEBUG LINE ---
+        logger.info(f"[DEBUG] CSV Headers found: {reader.fieldnames}")
+        for row in reader:
+            # Map to the header names found in CSV
+            mof_id = (row.get("MOF Identifier v1 (SMILES + Metadata)") or "").strip()
+            metal = (row.get("Metal Types") or "").strip()
+            if not mof_id or not metal:
+                continue
+            try:
+                lcd = float(row["Largest Cavity Diameter (Ã…)"])
+                pld = float(row["Pore Limiting Diameter (Ã…)"])
+            except (KeyError, TypeError, ValueError):
+                logger.warning(f"[MOF_DATA_CSV] Skipping malformed row: {row}")
+                continue
+            rows.append((mof_id, lcd, pld, metal))
+
+    lines = [
+        "# mof_data.py",
+        "# AUTO-GENERATED from api/assets/MOF_data.csv — do not edit by hand.",
+        "# Edit the CSV instead; this module regenerates automatically.",
+        "",
+        "MOF_DB = {",
+    ]
+    for mof_id, lcd, pld, metal in rows:
+        lines.append(f"    {mof_id!r}: ({lcd!r}, {pld!r}, {metal!r}),")
+    lines.append("}")
+    lines.append("")
+    logger.info(f"[MOF_DATA_CSV] Generated mof_data.py from {len(rows)} CSV rows")
+    return "\n".join(lines)
+
+
+def _get_mof_data_source():
+    """Return generated mof_data.py source, reusing the cached copy unless the CSV changed."""
+    if not MOF_DATA_CSV_PATH.is_file():
+        raise FileNotFoundError(f"MOF_data.csv not found at {MOF_DATA_CSV_PATH}")
+
+    current_mtime = MOF_DATA_CSV_PATH.stat().st_mtime
+    if _mof_data_cache["source"] is None or _mof_data_cache["mtime"] != current_mtime:
+        _mof_data_cache["source"] = _build_mof_data_source()
+        _mof_data_cache["mtime"] = current_mtime
+
+    return _mof_data_cache["source"]
+
+
+############################################
+# Debug: serve the raw MOF_data.csv for inspection
+# ──────────────────────────────────────────
+# Not used by the frontend (mof_renderer.py gets its data through the
+# generated mof_data.py module above) — kept only as a manual sanity
+# check, e.g. to confirm the CSV Django is reading matches what you
+# just edited.
 ############################################
 @api_view(["GET"])
 def get_mof_data_csv(request):
-    csv_path = Path(settings.BASE_DIR) / "assets" / "MOF_data.csv"
-
-    if not csv_path.is_file():
-        logger.error(f"[MOF_DATA_CSV] File missing: {csv_path}")
+    if not MOF_DATA_CSV_PATH.is_file():
+        logger.error(f"[MOF_DATA_CSV] File missing: {MOF_DATA_CSV_PATH}")
         return JsonResponse({"error": "MOF_data.csv not found", "csv_missing": True}, status=404)
 
     try:
-        content = csv_path.read_text(encoding="utf-8-sig")
+        content = MOF_DATA_CSV_PATH.read_text(encoding="utf-8-sig")
     except Exception as e:
         logger.error(f"[MOF_DATA_CSV] Failed to read: {e}", exc_info=True)
         return JsonResponse({"error": "Failed to read MOF_data.csv"}, status=500)

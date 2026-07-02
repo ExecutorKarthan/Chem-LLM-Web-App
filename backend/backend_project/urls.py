@@ -24,6 +24,8 @@ urlpatterns = [
     path("api/prime/", api_views.prime_gemini),
     path("api/ask-with-data/", api_views.ask_gemini_with_data),
     path("api/clear-token/", api_views.clear_token),
+    path("api/mof-generate/", api_views.generate_mof_code),
+    path("api/mof-engine/<str:filename>", api_views.get_mof_engine_file),
 
     # ── RDKit WASM — must be explicit BEFORE the SPA catchall ─────────────
     # The catchall regex below would intercept /RDKit_minimal.wasm and return
