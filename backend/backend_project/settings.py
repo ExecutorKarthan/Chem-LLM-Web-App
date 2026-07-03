@@ -187,20 +187,32 @@ SESSION_EXPIRE_AT_BROWSER_CLOSE = False
 # Logging
 ############################################
 LOGGING = {
-    "version": 1,
-    "disable_existing_loggers": False,
-    "handlers": {
-        "console": {"class": "logging.StreamHandler"},
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'simple': {
+            'format': '[{asctime}] {levelname} {message}',
+            'style': '{',
+        },
     },
-    "root": {
-        "handlers": ["console"],
-        "level": "DEBUG" if DEBUG else "INFO",
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'simple',
+        },
     },
-    "loggers": {
-        "django": {
-            "handlers": ["console"],
-            "level": "DEBUG" if DEBUG else "INFO",
-            "propagate": False,
+    'loggers': {
+        # This line explicitly silences the file-watcher tracking spam:
+        'django.utils.autoreload': {
+            'handlers': ['console'],
+            'level': 'WARNING',
+            'propagate': False,
+        },
+        # Keeps server requests clean
+        'django.server': {
+            'handlers': ['console'],
+            'level': 'INFO',
+            'propagate': False,
         },
     },
 }

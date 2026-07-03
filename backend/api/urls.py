@@ -17,6 +17,9 @@ urlpatterns = [
     path('api/test-key/', api_views.test_api_key, name='test_key'),
 
     # MOF engine
+    path("api/mof-meta/", api_views.get_mof_meta),
+    path("api/mof-filter/", api_views.filter_mofs),
+    
     path("api/mof-generate/", api_views.generate_mof_code),
     path("api/mof-engine/<str:filename>", api_views.get_mof_engine_file),
 

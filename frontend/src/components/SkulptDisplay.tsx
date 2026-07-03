@@ -226,21 +226,30 @@ const builtinRead = (filename: string): string => {
           () => {
             setRunning(false);
           },
-          (err: unknown) => {
+          (err: any) => {
+            setRunning(false);
+            
+            // 1. Expose the raw error to the window so you can read it via the browser console
+            window.lastSkulptError = err;
+
+            // 2. Safely extract the comprehensive Python traceback string
             let errorMessage = "Unknown error";
-            console.error("Skulpt execution error:", err);
-            if (err instanceof Error) {
-              errorMessage = err.message;
+            if (err && typeof err.toString === "function") {
+              errorMessage = err.toString();
             } else if (typeof err === "string") {
               errorMessage = err;
             }
+
+            console.error("Python Execution Crash Details:", errorMessage);
+
+            // 3. Print the raw Python exception message clearly on your screen
             setOutputText(
               (prev) =>
                 prev +
-                "<br><strong style='color:red'>Error: </strong>" +
-                errorMessage
+                "<br><strong style='color:red'>Python Runtime Error:</strong><br><pre style='color:#cc0000; background:#fff0f0; padding:8px; border:1px solid #ffcccc; margin-top:4px;'>" +
+                errorMessage +
+                "</pre>"
             );
-            setRunning(false);
           }
         );
     }, 100);
