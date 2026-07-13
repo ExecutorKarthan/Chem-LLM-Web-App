@@ -8,6 +8,8 @@ import { BACKEND_URL } from "../config.js";
 import SmilesInput from "./SMILESInput.js";
 import MoleculeViewer from "./MoleculeViewer.js";
 import MOFInput from "./MOFInput.js";
+import type { ReadoutLine } from "./MOFInput.js";
+import MofReadoutPanel from "./MofReadoutPanel.js";
 import SkulptDisplay from "./SkulptDisplay.js";
 
 // Helper function to get CSRF token from cookies
@@ -30,8 +32,9 @@ const ChemApp = () => {
   const [loading, setLoading] = useState<boolean>(false);
   const [submittedSmiles, setSubmittedSmiles] = useState<string[]>([]);
   const [submittedSubstructure, setSubmittedSubstructure] = useState<string>("");
-  const [mofMode, setMofMode] = useState<boolean>(false);
+  const [linkerViewerMode, setLinkerViewerMode] = useState<boolean>(false);
   const [mofCode, setMofCode] = useState<string>("");
+  const [mofReadout, setMofReadout] = useState<ReadoutLine[]>([]);
 
   const beginRequest = () => {
     setLoading(true);
@@ -158,11 +161,11 @@ const ChemApp = () => {
       {/* ── Mode toggle ── */}
       <Row justify="center" style={{ marginBottom: 8 }}>
         <Col xs={24} style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 10 }}>
-          <span style={{ fontSize: 13, color: mofMode ? "#333" : "#aaa", fontWeight: 500 }}>
+          <span style={{ fontSize: 13, color: linkerViewerMode ? "#aaa" : "#333", fontWeight: 500 }}>
             MOF Explorer
           </span>
-          <Switch checked={mofMode} onChange={setMofMode} />
-          <span style={{ fontSize: 13, color: mofMode ? "#aaa" : "#333", fontWeight: 500 }}>
+          <Switch checked={linkerViewerMode} onChange={setLinkerViewerMode} />
+          <span style={{ fontSize: 13, color: linkerViewerMode ? "#333" : "#aaa", fontWeight: 500 }}>
             Linker Viewer
           </span>
         </Col>
@@ -175,20 +178,23 @@ const ChemApp = () => {
           md={12}
           style={colStyle({ minHeight: 350, display: "flex", flexDirection: "column" })}
         >
-          {mofMode ? (
+          {linkerViewerMode ? (
             <SmilesInput onSubmitSmiles={handleSubmitSmiles} />
           ) : (
-            <MOFInput onCodeReady={setMofCode} />
+            <MOFInput onCodeReady={setMofCode} onReadout={setMofReadout} />
           )}
         </Col>
         <Col xs={24} md={12} style={colStyle({ overflowY: "auto" })}>
-          {mofMode ? (
+          {linkerViewerMode ? (
             <MoleculeViewer
               smiles={submittedSmiles}
               substructure={submittedSubstructure}
             />
           ) : (
-            <SkulptDisplay code={mofCode} />
+            <>
+              <SkulptDisplay code={mofCode} />
+              <MofReadoutPanel lines={mofReadout} />
+            </>
           )}
         </Col>
       </Row>

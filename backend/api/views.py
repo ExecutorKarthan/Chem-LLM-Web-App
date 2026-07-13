@@ -102,13 +102,527 @@ ION_RADII = {
 
 
 ############################################
+# CSRF Token endpoint
+############################################
+@ensure_csrf_cookie
+def get_csrf_token(request):
+    """Return CSRF token for frontend"""
+    token = get_token(request)
+    logger.info(f"[CSRF] Generated CSRF token: {token[:10]}...")
+    response = JsonResponse({'csrfToken': token})
+    return response
+
+
+############################################
+# Cookie existence check
+############################################
+def check_cookie(request):
+    logger.info("=" * 80)
+    logger.info("[CHECK_COOKIE] Checking for gemini_token cookie")
+
+    all_cookies = request.COOKIES
+    logger.info(f"[CHECK_COOKIE] All cookies present: {list(all_cookies.keys())}")
+
+    token = request.COOKIES.get("gemini_token")
+    logger.info(f"[CHECK_COOKIE] gemini_token exists: {bool(token)}")
+    if token:
+        logger.info(f"[CHECK_COOKIE] Token value: {token}")
+        cached_value = cache.get(token)
+        logger.info(f"[CHECK_COOKIE] Token found in cache: {cached_value is not None}")
+        if cached_value:
+            logger.info(f"[CHECK_COOKIE] Cached API key length: {len(cached_value)}")
+            logger.info(f"[CHECK_COOKIE] Cached API key preview: {cached_value[:10]}...")
+
+    logger.info("=" * 80)
+    return JsonResponse({"token_exists": bool(token)})
+
+
+############################################
+# Tokenize API key into cache + secure cookie
+############################################
+@csrf_exempt
+@ensure_csrf_cookie
+def tokenize_key(request):
+    logger.info("=" * 80)
+    logger.info("[TOKENIZE] Starting tokenization process")
+    logger.info(f"[TOKENIZE] Request method: {request.method}")
+
+    if request.method != "POST":
+        logger.error(f"[TOKENIZE] Invalid method: {request.method}")
+        return JsonResponse({"error": "Invalid request method"}, status=405)
+
+    try:
+        body = json.loads(request.body)
+        api_key = body.get("apiKey")
+        logger.info(f"[TOKENIZE] API key received: {api_key is not None}")
+
+        if not api_key:
+            logger.error("[TOKENIZE] No API key provided")
+            return JsonResponse({"error": "API key is required"}, status=400)
+
+        api_key = api_key.strip()
+        logger.info(f"[TOKENIZE] API key length: {len(api_key)}")
+        logger.info(f"[TOKENIZE] API key preview: {api_key[:10]}...")
+
+        token = str(uuid.uuid4())
+        logger.info(f"[TOKENIZE] Generated token: {token}")
+
+        # Test cache connection before storing
+        try:
+            cache.set("test_connection", "test_value", timeout=10)
+            test_retrieve = cache.get("test_connection")
+            logger.info(f"[TOKENIZE] Cache connection test: {test_retrieve == 'test_value'}")
+            cache.delete("test_connection")
+        except Exception as cache_err:
+            logger.error(f"[TOKENIZE] Cache connection test FAILED: {cache_err}")
+            return JsonResponse(
+                {"error": "Cache connection failed", "details": str(cache_err)},
+                status=500,
+            )
+
+        cache.set(token, api_key, timeout=5400)
+        logger.info("[TOKENIZE] Storage complete")
+
+        retrieved = cache.get(token)
+        logger.info(f"[TOKENIZE] Verification - Retrieved from cache: {retrieved is not None}")
+        if retrieved:
+            logger.info(f"[TOKENIZE] Verification - Keys match: {retrieved == api_key}")
+        else:
+            logger.error("[TOKENIZE] CRITICAL: Failed to retrieve from cache after storage!")
+            return JsonResponse({"error": "Failed to store token in cache"}, status=500)
+
+        is_secure = not settings.DEBUG
+
+        response = JsonResponse({"message": "Token set in secure cookie."})
+        response.set_cookie(
+            key="gemini_token",
+            value=token,
+            max_age=5400,
+            secure=is_secure,
+            httponly=True,
+            samesite="Lax",
+            path="/",
+        )
+        logger.info("[TOKENIZE] Cookie set in response")
+        logger.info("=" * 80)
+        return response
+
+    except Exception as e:
+        logger.error(f"[TOKENIZE] ERROR: {e}", exc_info=True)
+        return JsonResponse({"error": "Server error", "details": str(e)}, status=500)
+
+
+############################################
+# List available models (DEBUG)
+############################################
+@csrf_exempt
+@api_view(["GET"])
+def list_models(request):
+    """Debug endpoint to list available Gemini models"""
+    logger.info("=" * 80)
+    logger.info("[LIST_MODELS] Request received")
+
+    token = request.COOKIES.get("gemini_token")
+    if not token:
+        return Response({"error": "No token"}, status=401)
+
+    api_key = cache.get(token)
+    if not api_key:
+        return Response({"error": "Invalid token"}, status=403)
+
+    try:
+        client = genai.Client(api_key=api_key)
+        models = client.models.list()
+        model_names = [model.name for model in models]
+        logger.info(f"[LIST_MODELS] Found {len(model_names)} models")
+        logger.info("=" * 80)
+        return Response({"models": model_names})
+    except Exception as e:
+        logger.error(f"[LIST_MODELS] Error: {e}", exc_info=True)
+        logger.info("=" * 80)
+        return Response({"error": str(e)}, status=500)
+
+
+############################################
+# Test API key (DEBUG)
+############################################
+@csrf_exempt
+@api_view(["GET"])
+def test_api_key(request):
+    """Debug endpoint to test if the stored API key works"""
+    logger.info("=" * 80)
+    logger.info("[TEST_KEY] Request received")
+
+    token = request.COOKIES.get("gemini_token")
+    if not token:
+        return Response({"error": "No token"}, status=401)
+
+    api_key = cache.get(token)
+    if not api_key:
+        return Response({"error": "Invalid token"}, status=403)
+
+    try:
+        client = genai.Client(api_key=api_key)
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents="Say hello",
+        )
+        logger.info("[TEST_KEY] API key works!")
+        logger.info("=" * 80)
+        return Response({"success": True, "api_key_works": True, "response": response.text})
+    except Exception as e:
+        logger.error(f"[TEST_KEY] Error: {e}", exc_info=True)
+        logger.info("=" * 80)
+        return Response({"success": False, "error": str(e), "error_type": type(e).__name__}, status=400)
+
+
+############################################
+# Gemini query endpoint
+############################################
+@csrf_exempt
+@api_view(["POST"])
+def ask_gemini(request, max_retries=2, delay=2):
+    logger.info("=" * 80)
+    logger.info("[ASK_GEMINI] ========== NEW REQUEST ==========")
+
+    model_names = [
+        "gemini-2.5-flash",       # stable, fast, generous quota -- try first
+        "gemini-2.5-flash-lite",  # stable, lightweight fallback
+        "gemini-2.5-pro",         # stable, most capable
+        "gemini-3-flash-preview", # preview -- unreliable, last resort
+        "gemini-3-pro-preview",   # preview -- unreliable, last resort
+    ]
+
+    token = request.COOKIES.get("gemini_token")
+    if not token:
+        logger.error("[ASK_GEMINI] FAILURE: No gemini_token cookie present")
+        logger.info("=" * 80)
+        return Response({"error": "Missing gemini_token cookie."}, status=status.HTTP_401_UNAUTHORIZED)
+
+    try:
+        api_key = cache.get(token)
+    except Exception as cache_error:
+        logger.error(f"[ASK_GEMINI] Cache error: {cache_error}", exc_info=True)
+        logger.info("=" * 80)
+        return Response({"error": f"Cache error: {str(cache_error)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    if not api_key:
+        logger.error("[ASK_GEMINI] FAILURE: Token not found in cache")
+        logger.info("=" * 80)
+        return Response({"error": "Invalid or expired token."}, status=status.HTTP_403_FORBIDDEN)
+
+    prompt = request.data.get("prompt")
+    if not prompt:
+        logger.error("[ASK_GEMINI] FAILURE: No prompt in request")
+        logger.info("=" * 80)
+        return Response({"error": "Prompt is missing in request."}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        client = genai.Client(api_key=api_key)
+    except Exception as e:
+        logger.error(f"[ASK_GEMINI] Failed to create Gemini client: {e}", exc_info=True)
+        logger.info("=" * 80)
+        return Response({"error": f"Failed to create Gemini client: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    for model_name in model_names:
+        for attempt in range(max_retries):
+            try:
+                logger.info(f"[ASK_GEMINI] Trying model: {model_name} (Attempt {attempt + 1}/{max_retries})")
+                response = client.models.generate_content(model=model_name, contents=prompt)
+                response_text = response.text if response.text is not None else ""
+                logger.info(f"[ASK_GEMINI] SUCCESS with {model_name}. Response length: {len(response_text)}")
+                logger.info("=" * 80)
+                return Response({"response": response_text}, status=status.HTTP_200_OK)
+
+            except ClientError as e:
+                error_message = str(e)
+                logger.error(f"[ASK_GEMINI] ClientError with {model_name}: {error_message}")
+                if "API_KEY_INVALID" in error_message or "API key not valid" in error_message:
+                    logger.error("[ASK_GEMINI] FAILURE: Invalid API key")
+                    logger.info("=" * 80)
+                    return Response({"error": "Invalid or unauthorized API key provided."}, status=status.HTTP_401_UNAUTHORIZED)
+                if "RESOURCE_EXHAUSTED" in error_message or "quota" in error_message.lower():
+                    logger.warning(f"[ASK_GEMINI] {model_name} quota exceeded, trying next model...")
+                    break
+                logger.info("=" * 80)
+                return Response({"error": f"Client error with {model_name}: {error_message}"}, status=status.HTTP_400_BAD_REQUEST)
+
+            except ServerError as e:
+                if "UNAVAILABLE" in str(e):
+                    logger.warning(f"[ASK_GEMINI] {model_name} unavailable, retrying...")
+                    time.sleep(delay * (2 ** attempt))
+                    continue
+                logger.error(f"[ASK_GEMINI] ServerError: {e}", exc_info=True)
+                logger.info("=" * 80)
+                return Response({"error": f"Server error: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+            except (httpx.RemoteProtocolError, httpx.ConnectError, httpx.ReadError) as e:
+                logger.warning(f"[ASK_GEMINI] Network error with {model_name}: {e} — trying next model")
+                break  # move to next model
+            except Exception as e:
+                logger.error(f"[ASK_GEMINI] Unexpected error: {e}", exc_info=True)
+                logger.info("=" * 80)
+                return Response({"error": f"Unexpected error: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    logger.error("[ASK_GEMINI] FAILURE: All models exhausted")
+    logger.info("=" * 80)
+    return Response({"error": "All Gemini models are currently unavailable or quota exceeded."}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+
+############################################
+# Helper: load MOF CSV as formatted string
+############################################
+def load_mof_csv():
+    """
+    Reads the MOF CSV from disk and returns a formatted string
+    suitable for inline injection into a Gemini prompt.
+    """
+    if not MOF_DATA_CSV_PATH.is_file():
+        logger.error(f"[MOF_CSV] File not found at: {MOF_DATA_CSV_PATH}")
+        raise FileNotFoundError(
+            f"MOF data file not found at {MOF_DATA_CSV_PATH}. "
+            "Please ensure MOF_data.csv exists in backend/assets/."
+        )
+
+    rows = []
+    with MOF_DATA_CSV_PATH.open(newline="", encoding="utf-8-sig") as f:
+        reader = csv.DictReader(f)
+        headers = reader.fieldnames
+        if not headers:
+            raise ValueError("MOF CSV is empty or has no header row.")
+        for row in reader:
+            rows.append(row)
+
+    if not rows:
+        raise ValueError("MOF CSV has headers but contains no data rows.")
+
+    logger.info(f"[MOF_CSV] Loaded {len(rows)} rows with columns: {headers}")
+
+    lines = ["MOF REFERENCE DATA (SMILES notation):"]
+    lines.append(", ".join(headers))
+    lines.append("-" * 80)
+    for row in rows:
+        lines.append(", ".join(str(row.get(h, "")) for h in headers))
+
+    return "\n".join(lines)
+
+
+############################################
+# Prime Gemini with MOF CSV data
+############################################
+@csrf_exempt
+@api_view(["POST"])
+def prime_gemini(request, max_retries=2, delay=2):
+    """
+    Sends the MOF CSV data to Gemini as a standalone priming call.
+    Returns Gemini's acknowledgment response, prefaced with a success message.
+    """
+    logger.info("=" * 80)
+    logger.info("[PRIME_GEMINI] ========== NEW PRIME REQUEST ==========")
+
+    try:
+        csv_content = load_mof_csv()
+    except FileNotFoundError as e:
+        logger.error(f"[PRIME_GEMINI] CSV missing: {e}")
+        return Response({"error": str(e), "csv_missing": True}, status=status.HTTP_404_NOT_FOUND)
+    except ValueError as e:
+        logger.error(f"[PRIME_GEMINI] CSV invalid: {e}")
+        return Response({"error": str(e), "csv_missing": True}, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
+
+    token = request.COOKIES.get("gemini_token")
+    if not token:
+        return Response({"error": "Missing gemini_token cookie."}, status=status.HTTP_401_UNAUTHORIZED)
+    api_key = cache.get(token)
+    if not api_key:
+        return Response({"error": "Invalid or expired token."}, status=status.HTTP_403_FORBIDDEN)
+
+    priming_prompt = (
+        "You are a chemistry assistant specialising in Metal-Organic Frameworks (MOFs) "
+        "and Covalent Organic Frameworks (COFs). I am providing you with a reference "
+        "dataset of MOF molecules in SMILES notation along with their framework "
+        "properties. Please acknowledge you have received this data and briefly summarise "
+        "what it contains so I know you are ready to answer questions about it.\n\n"
+        f"{csv_content}"
+    )
+
+    model_names = [
+        "gemini-2.5-flash",       # stable, fast, generous quota -- try first
+        "gemini-2.5-flash-lite",  # stable, lightweight fallback
+        "gemini-2.5-pro",         # stable, most capable
+        "gemini-3-flash-preview", # preview -- unreliable, last resort
+        "gemini-3-pro-preview",   # preview -- unreliable, last resort
+    ]
+
+    try:
+        client = genai.Client(api_key=api_key)
+    except Exception as e:
+        logger.error(f"[PRIME_GEMINI] Failed to create Gemini client: {e}", exc_info=True)
+        return Response({"error": f"Failed to create Gemini client: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    for model_name in model_names:
+        for attempt in range(max_retries):
+            try:
+                logger.info(f"[PRIME_GEMINI] Trying model: {model_name} (Attempt {attempt + 1}/{max_retries})")
+                response = client.models.generate_content(model=model_name, contents=priming_prompt)
+                response_text = response.text if response.text is not None else ""
+                logger.info(f"[PRIME_GEMINI] SUCCESS with {model_name}")
+                logger.info("=" * 80)
+                return Response({"response": "✅ MOF data was successfully submitted to Gemini.\n\n" + response_text}, status=status.HTTP_200_OK)
+
+            except ClientError as e:
+                error_message = str(e)
+                logger.error(f"[PRIME_GEMINI] ClientError with {model_name}: {error_message}")
+                if "API_KEY_INVALID" in error_message or "API key not valid" in error_message:
+                    return Response({"error": "Invalid or unauthorized API key provided."}, status=status.HTTP_401_UNAUTHORIZED)
+                if "RESOURCE_EXHAUSTED" in error_message or "quota" in error_message.lower():
+                    logger.warning(f"[PRIME_GEMINI] {model_name} quota exceeded, trying next model...")
+                    break
+                return Response({"error": f"Client error with {model_name}: {error_message}"}, status=status.HTTP_400_BAD_REQUEST)
+
+            except ServerError as e:
+                if "UNAVAILABLE" in str(e):
+                    logger.warning(f"[ASK_GEMINI] {model_name} unavailable, retrying...")
+                    time.sleep(delay * (2 ** attempt))
+                    continue
+                logger.error(f"[PRIME_GEMINI] ServerError: {e}", exc_info=True)
+                return Response({"error": f"Server error: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+            except (httpx.RemoteProtocolError, httpx.ConnectError, httpx.ReadError) as e:
+                logger.warning(f"[PRIME_GEMINI] Network error with {model_name}: {e} — trying next model")
+                break  # move to next model
+            except Exception as e:
+                logger.error(f"[PRIME_GEMINI] Unexpected error: {e}", exc_info=True)
+                return Response({"error": f"Unexpected error: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    logger.error("[PRIME_GEMINI] FAILURE: All models exhausted")
+    logger.info("=" * 80)
+    return Response({"error": "All Gemini models are currently unavailable or quota exceeded."}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+
+############################################
+# Gemini query endpoint WITH CSV prepended
+############################################
+@csrf_exempt
+@api_view(["POST"])
+def ask_gemini_with_data(request, max_retries=2, delay=2):
+    """
+    Same as ask_gemini but prepends the full MOF CSV to every prompt
+    so Gemini has the reference data available for every question.
+    """
+    logger.info("=" * 80)
+    logger.info("[ASK_GEMINI_WITH_DATA] ========== NEW REQUEST ==========")
+
+    try:
+        csv_content = load_mof_csv()
+    except FileNotFoundError as e:
+        logger.error(f"[ASK_GEMINI_WITH_DATA] CSV missing: {e}")
+        return Response({"error": str(e), "csv_missing": True}, status=status.HTTP_404_NOT_FOUND)
+    except ValueError as e:
+        logger.error(f"[ASK_GEMINI_WITH_DATA] CSV invalid: {e}")
+        return Response({"error": str(e), "csv_missing": True}, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
+
+    token = request.COOKIES.get("gemini_token")
+    if not token:
+        return Response({"error": "Missing gemini_token cookie."}, status=status.HTTP_401_UNAUTHORIZED)
+    api_key = cache.get(token)
+    if not api_key:
+        return Response({"error": "Invalid or expired token."}, status=status.HTTP_403_FORBIDDEN)
+
+    prompt = request.data.get("prompt")
+    if not prompt:
+        return Response({"error": "Prompt is missing in request."}, status=status.HTTP_400_BAD_REQUEST)
+
+    full_prompt = (
+        "You are a chemistry assistant specialising in MOFs and COFs. "
+        "Use the following MOF reference data to answer the user's question.\n\n"
+        f"{csv_content}\n\n"
+        f"USER QUESTION: {prompt}"
+    )
+
+    model_names = [
+        "gemini-2.5-flash",       # stable, fast, generous quota -- try first
+        "gemini-2.5-flash-lite",  # stable, lightweight fallback
+        "gemini-2.5-pro",         # stable, most capable
+        "gemini-3-flash-preview", # preview -- unreliable, last resort
+        "gemini-3-pro-preview",   # preview -- unreliable, last resort
+    ]
+
+    try:
+        client = genai.Client(api_key=api_key)
+    except Exception as e:
+        logger.error(f"[ASK_GEMINI_WITH_DATA] Failed to create Gemini client: {e}", exc_info=True)
+        return Response({"error": f"Failed to create Gemini client: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    for model_name in model_names:
+        for attempt in range(max_retries):
+            try:
+                logger.info(f"[ASK_GEMINI_WITH_DATA] Trying model: {model_name} (Attempt {attempt + 1}/{max_retries})")
+                response = client.models.generate_content(model=model_name, contents=full_prompt)
+                response_text = response.text if response.text is not None else ""
+                logger.info(f"[ASK_GEMINI_WITH_DATA] SUCCESS with {model_name}")
+                logger.info("=" * 80)
+                return Response({"response": response_text}, status=status.HTTP_200_OK)
+
+            except ClientError as e:
+                error_message = str(e)
+                logger.error(f"[ASK_GEMINI_WITH_DATA] ClientError with {model_name}: {error_message}")
+                if "API_KEY_INVALID" in error_message or "API key not valid" in error_message:
+                    return Response({"error": "Invalid or unauthorized API key provided."}, status=status.HTTP_401_UNAUTHORIZED)
+                if "RESOURCE_EXHAUSTED" in error_message or "quota" in error_message.lower():
+                    logger.warning(f"[ASK_GEMINI_WITH_DATA] {model_name} quota exceeded, trying next model...")
+                    break
+                return Response({"error": f"Client error with {model_name}: {error_message}"}, status=status.HTTP_400_BAD_REQUEST)
+
+            except ServerError as e:
+                if "UNAVAILABLE" in str(e):
+                    logger.warning(f"[ASK_GEMINI_WITH_DATA] {model_name} unavailable, retrying...")
+                    time.sleep(delay * (2 ** attempt))
+                    continue
+                logger.error(f"[ASK_GEMINI_WITH_DATA] ServerError: {e}", exc_info=True)
+                return Response({"error": f"Server error: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+            except (httpx.RemoteProtocolError, httpx.ConnectError, httpx.ReadError) as e:
+                logger.warning(f"[ASK_GEMINI_WITH_DATA] Network error with {model_name}: {e} — trying next model")
+                break  # move to next model
+            except Exception as e:
+                logger.error(f"[ASK_GEMINI_WITH_DATA] Unexpected error: {e}", exc_info=True)
+                return Response({"error": f"Unexpected error: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    logger.error("[ASK_GEMINI_WITH_DATA] FAILURE: All models exhausted")
+    logger.info("=" * 80)
+    return Response({"error": "All Gemini models are currently unavailable or quota exceeded."}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+
+############################################
+# Clear token + cookie
+############################################
+@csrf_exempt
+@api_view(["POST"])
+def clear_token(request):
+    logger.info("=" * 80)
+    logger.info("[CLEAR_TOKEN] Request received")
+
+    token = request.COOKIES.get("gemini_token")
+    if token:
+        cache.delete(token)
+        logger.info("[CLEAR_TOKEN] Token deleted from cache")
+    else:
+        logger.info("[CLEAR_TOKEN] No token to clear")
+
+    response = JsonResponse({"message": "Token cleared."})
+    response.delete_cookie("gemini_token", samesite="Lax")
+    logger.info("[CLEAR_TOKEN] Cookie deleted from response")
+    logger.info("=" * 80)
+    return response
+
+
+############################################
 # Dynamic mof_data.py Structural Rebuilder
 ############################################
 def _build_mof_data_source():
     """Read MOF_data.csv from disk and return generated `mof_data.py` source."""
     rows = []
     
-    # 1. Print out diagnostic paths cleanly to your console
     print(f"\n[MOF PARSER] Absolute target path: {MOF_DATA_CSV_PATH.resolve()}")
     print(f"[MOF PARSER] Does the file physically exist here? {MOF_DATA_CSV_PATH.is_file()}")
     
@@ -122,14 +636,13 @@ def _build_mof_data_source():
             headers = reader.fieldnames or []
             print(f"[MOF PARSER] CSV successfully opened. Columns found: {headers}")
             
-            # Substring matching to avoid encoding artifacts like 'Ã…'
             lcd_key = next((h for h in headers if "Largest Cavity" in h), None)
             pld_key = next((h for h in headers if "Pore Limiting" in h), None)
             id_key = next((h for h in headers if "Identifier" in h), None)
             metal_key = next((h for h in headers if "Metal Types" in h), None)
 
             if not (lcd_key and pld_key and id_key and metal_key):
-                print(f"[MOF PARSER] ERROR: Missing vital header structural columns! (LCD: {lcd_key}, PLD: {pld_key}, ID: {id_key}, Metal: {metal_key})")
+                print(f"[MOF PARSER] ERROR: Missing vital header columns! (LCD: {lcd_key}, PLD: {pld_key}, ID: {id_key}, Metal: {metal_key})")
                 return ""
 
             for idx, row in enumerate(reader):
@@ -162,36 +675,20 @@ def _build_mof_data_source():
     return "\n".join(lines)
 
 
-def _get_parsed_mof_db():
-    """Retrieves the database dictionary by evaluating the generated source."""
-    try:
-        src = _get_mof_data_source_cached()
-        if not src:
-            return {}
-        local_vars = {}
-        exec(src, {}, local_vars)
-        return local_vars.get("MOF_DB", {})
-    except Exception as e:
-        logger.error(f"Failed parsing cached mof data dict: {e}")
-        return {}
-
-
-def _get_mof_data_source_cached():
+def _mof_data_source_cached():
     if not MOF_DATA_CSV_PATH.is_file():
         raise FileNotFoundError(f"MOF_data.csv not found at {MOF_DATA_CSV_PATH}")
-
     current_mtime = MOF_DATA_CSV_PATH.stat().st_mtime
     if _mof_data_cache["source"] is None or _mof_data_cache["mtime"] != current_mtime:
         _mof_data_cache["source"] = _build_mof_data_source()
         _mof_data_cache["mtime"] = current_mtime
-
     return _mof_data_cache["source"]
 
 
 def _get_parsed_mof_db():
     """Retrieves the database dictionary by evaluating the generated source."""
     try:
-        src = _get_mof_data_source_cached()
+        src = _mof_data_source_cached()
         if not src:
             return {}
         local_vars = {}
@@ -200,6 +697,7 @@ def _get_parsed_mof_db():
     except Exception as e:
         logger.error(f"Failed parsing cached mof data dict: {e}")
         return {}
+
 
 ############################################
 # Dynamic Search and Metadata Catalogs
@@ -211,12 +709,10 @@ def get_mof_meta(request):
     except Exception as e:
         logger.error(f"Error parsing MOF DB: {e}")
         mof_db = {}
-
+    
     metals = set()
     linkers = set()
-    
     for mof_id, (lcd, pld, metal_type) in mof_db.items():
-        # Parse metals safely split by commas
         if metal_type:
             for m in [x.strip() for x in metal_type.split(",")]:
                 if m:
@@ -224,196 +720,213 @@ def get_mof_meta(request):
         if mof_id and mof_id.strip():
             linkers.add(mof_id.strip())
 
-    # Sort the outputs so they populate beautifully alphabetically
     return JsonResponse({
         "guest_ions": list(ION_RADII.keys()),
         "metals": sorted(list(metals)),
         "linkers": sorted(list(linkers)),
-    }, status=200)
+    }, status=status.HTTP_200_OK)
 
 
 @api_view(["POST"])
 def filter_mofs(request):
-    # Support both JSON payload options (DRF request.data or standard raw json fallback)
-    data = request.data if hasattr(request, 'data') else {}
-    if not data and request.body:
-        try:
-            data = json.loads(request.body)
-        except Exception:
-            data = {}
+    """
+    Filters the MOF database based on the selected metal, organic identifier string, 
+    or guest ion viability calculations.
+    """
+    try:
+        body = json.loads(request.body)
+    except Exception:
+        body = {}
 
-    selected_metal = data.get("metal")
-    selected_linker = data.get("linker")
-    
+    selected_linker = body.get("linker")  # This is the full identifier string from the dropdown
+    selected_metal = body.get("metal")
+    selected_ion = body.get("ion")
+    tolerance = float(body.get("tolerance", 0.0))
+
     try:
         mof_db = _get_parsed_mof_db()
     except Exception:
         mof_db = {}
 
-    results = []
-    for mof_id, (lcd, pld, metal_type) in mof_db.items():
-        mof_metals = [x.strip() for x in metal_type.split(",")] if metal_type else []
-        
-        match_metal = not selected_metal or (selected_metal in mof_metals)
-        match_linker = not selected_linker or (selected_linker == mof_id)
-        
-        if match_metal and match_linker:
-            results.append({
-                "mof_id": mof_id,
-                "metal": metal_type,
-                "lcd": lcd,
-                "pld": pld
-            })
+    filtered = []
+    
+    # Extract ion parameters for physical pore entry testing
+    ion_radius, ion_scaling, _ = ION_RADII.get(selected_ion, (None, None, None))
+
+    for identifier, (lcd, pld, metal_str) in mof_db.items():
+        # 1. Match by full identifier token if selected
+        if selected_linker and selected_linker != identifier:
+            continue
             
-    return JsonResponse({"results": results}, status=200)
+        # 2. Match by composition metal token
+        if selected_metal:
+            row_metals = [x.strip() for x in metal_str.split(",")] if metal_str else []
+            if selected_metal not in row_metals:
+                continue
 
-############################################
-# CSRF and Session Cookie Tokenizer Stubs
-############################################
-@ensure_csrf_cookie
-def get_csrf_token(request):
-    token = get_token(request)
-    return JsonResponse({'csrfToken': token})
+        # 3. Compute structural ion transport viability
+        is_viable = False
+        scaled_size = None
+        
+        if ion_radius is not None and ion_scaling is not None:
+            scaled_size = ion_radius * ion_scaling
+            if pld >= (scaled_size - tolerance):
+                is_viable = True
+        else:
+            is_viable = True
+
+        # Return standardized keys matching the frontend's expected properties
+        filtered.append({
+            "identifier": identifier,
+            "metals": metal_str,
+            "lcd": lcd,
+            "pld": pld,
+            "scaled_size": round(scaled_size, 3) if scaled_size else None,
+            "is_viable": is_viable
+        })
+
+    return JsonResponse({"results": filtered}, status=status.HTTP_200_OK)
+
+def _compute_pore_readout(lcd, pld, guest_ion):
+    """
+    Same verdict math as MOFRenderer.get_readout_lines() in
+    mof_renderer.py, computed server-side so it can be returned as
+    structured JSON and rendered as a real HTML info panel next to the
+    Skulpt canvas instead of illegible turtle-drawn text on the diagram.
+    Returns a list of {"text": str, "color": str} dicts, or [] if no
+    guest ion was selected.
+    """
+    if not guest_ion:
+        return []
+
+    try:
+        lcd_val = float(lcd)
+        pld_val = float(pld)
+    except (ValueError, TypeError):
+        return [{"text": "Error: Invalid LCD/PLD metrics supplied.", "color": "#F85149"}]
+
+    entry = ION_RADII.get(guest_ion)
+    pore_fit_ang = pld_val / 2
+
+    if not entry:
+        return [{"text": f"Ion '{guest_ion}' not in database", "color": "#8B949E"}]
+
+    ionic_ang, hydrated_ang, verified = entry
+    # effective_ang = hydrated_ang if hydrated_ang is not None else ionic_ang
+
+    # if effective_ang <= pore_fit_ang * 0.80:
+    #     verdict, verdict_col = "FITS  (comfortable)", "#3FB950"
+    # elif effective_ang <= pore_fit_ang:
+    #     verdict, verdict_col = "FITS  (tight)", "#D29922"
+    # else:
+    #     verdict, verdict_col = "TOO LARGE", "#F85149"
+
+    lines = [
+        (f"Largest Cavity Diameter (LCD): {lcd_val:.2f} \u00c5  \u2192  cavity radius {lcd_val/2:.2f} \u00c5", "#8B949E"),
+        (f"Pore Limiting Diameter (PLD): {pld_val:.2f} \u00c5  \u2192  bottleneck radius {pore_fit_ang:.2f} \u00c5", "#8B949E"),
+        (f"Guest ion radius (bare): {ionic_ang:.2f} \u00c5", "#8B949E"),
+    ]
+    if hydrated_ang is not None:
+        lines.append((f"Guest ion radius (hydrated): {hydrated_ang:.2f} \u00c5  vs. PLD bottleneck {pore_fit_ang:.2f} \u00c5", "#4A90D9"))
+    # lines.append((verdict, verdict_col))
+    src_note = "Exp. verified" if "Experimental" in verified else "Est./unverified"
+    lines.append((f"* {src_note} ion radii; pore from MOF_data.csv", "#6E7681"))
+
+    return [{"text": text, "color": color} for text, color in lines]
 
 
-def check_cookie(request):
-    token = request.COOKIES.get("gemini_token")
-    return JsonResponse({"token_exists": bool(token)})
-
-
-@csrf_exempt
-def tokenize_key(request):
-    if request.method != "POST":
-        return JsonResponse({"error": "Invalid method"}, status=405)
+@api_view(["POST"])
+def generate_mof_code(request):
+    """
+    Accepts the selected metal and unique structural identifier string (mof_id),
+    verifies their co-presence, and compiles the dynamic Python canvas script.
+    """
     try:
         body = json.loads(request.body)
-        api_key = body.get("apiKey")
-        if not api_key:
-            return JsonResponse({"error": "API key is required"}, status=400)
+    except Exception:
+        body = {}
 
-        token = str(uuid.uuid4())
-        cache.set(token, api_key.strip(), timeout=5400)
-        
-        response = JsonResponse({"message": "Token set."})
-        response.set_cookie(
-            key="gemini_token", value=token, max_age=5400,
-            secure=not settings.DEBUG, httponly=True, samesite="Lax", path="/"
-        )
-        return response
-    except Exception as e:
-        return JsonResponse({"error": str(e)}, status=500)
+    selected_metal = body.get("metal")
+    mof_id = body.get("mof_id")  # Full identifier SMILES string from client
+    guest_ion = body.get("guest_ion")
+    simple_mode = body.get("simple_mode", False)
 
-
-@api_view(["POST"])
-@csrf_exempt
-def clear_token(request):
-    response = JsonResponse({"message": "Token cleared"})
-    response.delete_cookie("gemini_token", path="/")
-    return response
-
-
-############################################
-# Legacy/LLM Core Endpoint Handlers
-############################################
-@api_view(["GET"])
-def list_models(request):
-    return Response({"models": ["gemini-2.5-flash", "gemini-2.5-pro"]}, status=200)
-
-
-@api_view(["POST"])
-def test_api_key(request):
-    token = request.COOKIES.get("gemini_token")
-    api_key = cache.get(token) if token else None
-    if not api_key:
-        return Response({"valid": False, "error": "No API Key stored"}, status=401)
-    return Response({"valid": True})
-
-
-@api_view(["POST"])
-def ask_gemini(request):
-    return Response({"text": "LLM text processing response stub"})
-
-
-@api_view(["POST"])
-def prime_gemini(request):
-    return Response({"status": "primed"})
-
-
-@api_view(["POST"])
-def ask_gemini_with_data(request):
-    return Response({"text": "Data retrieval generation stub"})
-
-
-############################################
-# Gemini Execution Script Generation Engine
-############################################
-@api_view(["POST"])
-@csrf_exempt
-def generate_mof_code(request):
-    data = request.data or {}
-    metal = data.get("metal")
-    linker = data.get("linker")
-    guest_ion = data.get("guest_ion")
-    simple_mode = data.get("simple_mode", False)
-
-    if not metal or not linker:
-        return Response({"error": "Both structural metal and organic linker choices are required."}, status=400)
+    if not mof_id or not selected_metal:
+        return JsonResponse({"error": "Missing framework identifier (mof_id) or metal selection."}, status=status.HTTP_400_BAD_REQUEST)
 
     try:
         mof_db = _get_parsed_mof_db()
     except Exception as e:
-        return Response({"error": f"Failed database: {str(e)}"}, status=500)
+        return JsonResponse({"error": f"Database engine unavailable: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-    if linker not in mof_db:
-        return Response({"error": "Framework structure not found in lists."}, status=404)
+    # Validate presence in database
+    if mof_id not in mof_db:
+        return JsonResponse({"error": f"Structure '{mof_id}' not found in asset register."}, status=status.HTTP_404_NOT_FOUND)
 
-    lcd, pld, dataset_metals = mof_db[linker]
-    if metal not in [m.strip() for m in dataset_metals.split(",")]:
-        return Response({"error": f"Selected metal element {metal} is not present for this framework."}, status=400)
+    lcd, pld, metal_str = mof_db[mof_id]
+    row_metals = [x.strip() for x in metal_str.split(",")] if metal_str else []
 
-    script_lines = [
+    # Cross-verify selection sanity
+    if selected_metal not in row_metals:
+        return JsonResponse({
+            "error": f"Metal configuration mismatch. '{selected_metal}' does not belong to framework '{mof_id}'."
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+    # 1. Compute text readout logs for panel
+    readout_data = _compute_pore_readout(lcd, pld, guest_ion)
+
+    # 2. Build Python Turtle canvas script execution lines
+    safe_id = mof_id.replace('"', '\\"')
+    guest_arg = f"'{guest_ion}'" if guest_ion else "None"
+
+    code_lines = [
         "import turtle",
         "from mof_renderer import MOFRenderer",
-        "t = turtle.Turtle()",
-        "t.speed(0)",
-        "turtle.delay(0)",
-        "t.hideturtle()",
-        # FIX: Swap metal and linker, and explicitly pass guest_ion down if needed
-        f"renderer = MOFRenderer(t, {metal!r}, {linker!r}, cx=0, cy=0, guest_ion={guest_ion!r})",
+        "t_obj = turtle.Turtle()",
+        "t_obj.speed(0)",
+        "t_obj.hideturtle()",
+        f"renderer = MOFRenderer(t_obj, metal=\"{selected_metal}\", linker_smiles=\"{safe_id}\", guest_ion={guest_arg})",
     ]
 
     if simple_mode:
-        if guest_ion and guest_ion in ION_RADII:
-            script_lines.append("renderer.draw_simple_with_guest()")  # Remove {guest_ion!r}
-        else:
-            script_lines.append("renderer.draw_simple_without_guest()")
+        code_lines.append("renderer.draw_simple_without_guest()")
     else:
-        if guest_ion and guest_ion in ION_RADII:
-            script_lines.append("renderer.draw_with_guest()")         # Remove {guest_ion!r}
-        else:
-            script_lines.append("renderer.draw_without_guest()")
+        code_lines.append(f"renderer.draw_with_guest()")
 
-    return Response({"code": "\n".join(script_lines)}, status=200)
+    compiled_script = "\n".join(code_lines)
+
+    # Return clean structural payloads to front-end async listener
+    return JsonResponse({
+        "code": compiled_script,
+        "readout": readout_data
+    }, status=status.HTTP_200_OK)
 
 
+# Locate this section near the end of your backend views.py:
 @api_view(["GET"])
+# Ensure your standard session protection remains active (e.g., IsAuthenticated or your cookie validation framework)
 def get_mof_engine_file(request, filename):
+    """
+    Streams engine files securely to the Skulpt browser interpreter
+    by checking requests against an explicit whitelist register.
+    """
+    # 1. Maintain the explicit filename registry protection
     whitelist = [
-        "mof_renderer.py", "smiles_parser.py", "smiles_lexer.py",
-        "layout_engine.py", "ring_layout.py", "ring_utils.py",
-        "coordination_geometry.py", "turtle_renderer.py",
+        "smiles_lexer.py", "smiles_parser.py", "layout_engine.py",
+        "ring_utils.py", "ring_layout.py", "coordination_geometry.py", 
+        "turtle_renderer.py",
+        "mof_renderer.py",
     ]
 
     if filename == "mof_data.py":
         try:
-            return HttpResponse(_get_mof_data_source_cached(), content_type="text/x-python")
+            return HttpResponse(_mof_data_source_cached(), content_type="text/x-python")
         except Exception as e:
             return HttpResponse(f"# Error: {str(e)}", status=500, content_type="text/x-python")
 
     if filename not in whitelist:
         return HttpResponse("# Access Forbidden", status=403, content_type="text/x-python")
 
-    # Strategy: Check inside backend/api/ first, then check backend/assets/
     paths_to_check = [
         Path(settings.BASE_DIR) / "api" / "mof_engine" / filename,
         Path(settings.BASE_DIR) / "api" / filename,
@@ -428,12 +941,12 @@ def get_mof_engine_file(request, filename):
             break
 
     if not filepath:
-        # Print a clear diagnostic to your clean console showing exactly where it checked
         print(f"\n[ENGINE 404 DIAGNOSTIC] Could not find {filename}!")
         print("Checked locations:")
         for p in paths_to_check:
-            print(f"  - {p.resolve()}")
-        return HttpResponse(f"# Script {filename} missing", status=404, content_type="text/x-python")
+            print(f"  -> {p.resolve()}")
+        return HttpResponse(f"# Error: Engine file {filename} not found on server storage.", status=404, content_type="text/x-python")
 
-    with filepath.open(encoding="utf-8") as f:
-        return HttpResponse(f.read(), content_type="text/x-python")
+    # 2. Streams the code layout payload under existing security headers
+    response = HttpResponse(open(filepath, 'rb').read(), content_type='text/x-python')
+    return response

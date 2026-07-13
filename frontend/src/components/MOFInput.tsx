@@ -4,18 +4,28 @@ import { Select, Button, Switch, Alert, Radio, Form } from "antd";
 import axios from "axios";
 import { BACKEND_URL } from "../config.js";
 
+export interface ReadoutLine {
+  text: string;
+  color: string;
+}
+
 interface MOFInputProps {
   onCodeReady: (code: string) => void;
+  // Pore-fit readout for the current selection, computed server-side in
+  // generate_mof_code — feeds MofReadoutPanel.tsx. Optional so existing
+  // callers that only care about the Skulpt code keep working unchanged.
+  onReadout?: (lines: ReadoutLine[]) => void;
 }
 
 interface MofResult {
+  identifier: string,
   mof_id: string;
   metal: string;
   lcd: number;
   pld: number;
 }
 
-export const MOFInput: React.FC<MOFInputProps> = ({ onCodeReady }) => {
+export const MOFInput: React.FC<MOFInputProps> = ({ onCodeReady, onReadout }) => {
   // Metadata options from server
   const [guestIons, setGuestIons] = useState<string[]>([]);
   const [allMetals, setAllMetals] = useState<string[]>([]);
@@ -57,7 +67,7 @@ export const MOFInput: React.FC<MOFInputProps> = ({ onCodeReady }) => {
     if (searchMode === "metalFirst" && selectedMetal) {
       axios.post(`${BACKEND_URL}/api/mof-filter/`, { metal: selectedMetal })
         .then((res) => {
-          const validLinkers = res.data.results.map((r: MofResult) => r.mof_id);
+          const validLinkers = res.data.results.map((r: MofResult) => r.identifier || r.mof_id);
           setFilteredLinkers(validLinkers);
           // Auto-clear or adjust second field if current choice is invalid
           if (selectedLinker && !validLinkers.includes(selectedLinker)) {
@@ -89,24 +99,35 @@ export const MOFInput: React.FC<MOFInputProps> = ({ onCodeReady }) => {
   };
 
   const handleGenerate = async () => {
-    if (!selectedMetal || !selectedLinker) return;
-    setLoading(true);
-    setError(null);
+      if (!selectedMetal || !selectedLinker) return;
+      setLoading(true);
+      // Use undefined here to match the component's state type declaration
+      setError(undefined); 
 
-    try {
-      const response = await axios.post(`${BACKEND_URL}/api/mof-generate/`, {
-        metal: selectedMetal,
-        linker: selectedLinker,
-        guest_ion: showGuest ? guestIon : null,
-        simple_mode: simpleMode,
-      });
-      onCodeReady(response.data.code);
-    } catch (err: any) {
-      setError(err.response?.data?.error || "Error executing visualization engine script.");
-    } finally {
-      setLoading(false);
-    }
-  };
+      try {
+        const response = await axios.post(`${BACKEND_URL}/api/mof-generate/`, {
+          metal: selectedMetal,
+          mof_id: selectedLinker, // The full identifier string from column 1
+          guest_ion: showGuest ? guestIon : null,
+          simple_mode: simpleMode,
+        });
+        
+        if (response.data.code) {
+          onCodeReady(response.data.code);
+        } else {
+          setError("Server response did not include execution code.");
+        }
+        
+        if (onReadout) {
+          onReadout(response.data.readout || []);
+        }
+      } catch (err: any) {
+        console.error("Visualization error:", err);
+        setError(err.response?.data?.error || "Error executing visualization engine script.");
+      } finally {
+        setLoading(false);
+      }
+    };
 
   return (
     <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 16, maxWidth: 400 }}>

@@ -29,6 +29,25 @@ ATOM_COLORS = {
     "Pt": ("#CCCCCC", "#333333"),
     "Ag": ("#AAAAAA", "#333333"),
     "Au": ("#DDAA00", "#333333"),
+    # Additional MOF metal nodes / guest ion elements — previously missing,
+    # which forced them all into the same generic DEFAULT_ATOM_COLOR fallback.
+    "Cd": ("#C8A951", "#333333"),
+    "Cr": ("#7A9E5C", "#FFFFFF"),
+    "Ti": ("#9C9C9C", "#333333"),
+    "Zr": ("#6FA8DC", "#333333"),
+    "In": ("#B08FCE", "#333333"),
+    "Al": ("#B0B8C0", "#333333"),
+    "Li": ("#7FBF7F", "#333333"),
+    "Na": ("#C39BD3", "#333333"),
+    "K":  ("#9A7FBF", "#FFFFFF"),
+    "Rb": ("#8A6FB0", "#FFFFFF"),
+    "Cs": ("#7A5FA0", "#FFFFFF"),
+    "Mg": ("#8FBF8F", "#333333"),
+    "Ca": ("#7FA8D9", "#333333"),
+    "Sr": ("#6C97C8", "#FFFFFF"),
+    "Ba": ("#5C87B8", "#FFFFFF"),
+    "Y":  ("#B7C9E2", "#333333"),
+    "La": ("#C9A2D4", "#333333"),
 }
 
 DEFAULT_ATOM_COLOR = ("#AABBCC", "#333333")

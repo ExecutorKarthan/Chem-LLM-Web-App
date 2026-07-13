@@ -162,6 +162,66 @@ def _pore_driven_side(pore_diameter_ang, scale=1.0):
     return (pore_diameter_ang / math.sqrt(2)) * PX_PER_ANG * scale
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# LINKER FRAGMENT EXTRACTION
+#
+# MOF_DB identifiers (the "linker" value the whole app actually passes
+# around, per api/views.py::generate_mof_code) are full crystallographic
+# formulas: metal node(s), the organic linker, and often a counter-ion or
+# an extra uncoordinated copy of a ligand, all '.'-separated in one SMILES
+# string. Only ONE of those fragments should be laid out and drawn as the
+# ball-and-stick linker between the square/cube corners — parsing the raw
+# identifier wholesale causes every disconnected fragment's rings to be
+# laid out on top of each other near the origin (the "blob" bug).
+#
+# The full identifier is still exactly what MOF_DB is keyed by, so it's
+# kept untouched for the pore-data lookup below; only rendering uses the
+# extracted fragment.
+# ─────────────────────────────────────────────────────────────────────────────
+_PURE_ION_FRAGMENT_RE = re.compile(r"^(\[[^\[\]]+\])+$")
+
+
+def _split_identifier_fragments(identifier):
+    """Split a '.'-joined MOF_DB identifier into its disconnected pieces."""
+    return [f for f in identifier.split(".") if f.strip()]
+
+
+def _is_pure_ion_fragment(fragment):
+    """
+    True if a fragment is nothing but one or more bracket atoms back to
+    back (e.g. '[Cd]', '[Cu][Cu]', '[O-]') — a bare metal node or a
+    single-atom counter-ion, not an organic linker backbone.
+    """
+    return bool(_PURE_ION_FRAGMENT_RE.match(fragment.strip()))
+
+
+def _select_linker_fragment(identifier):
+    """
+    Pick the fragment to actually parse/lay out/draw as the linker.
+
+    Heuristic: drop pure-ion fragments (bare metal nodes), then take the
+    largest remaining fragment by atom count. Organic linkers are
+    reliably the largest species in the formula; loose counter-ions
+    (a lone carboxylate, nitrate, etc.) are smaller. Falls back to the
+    raw identifier if nothing else parses, so behavior never regresses
+    below "draw something."
+    """
+    fragments = _split_identifier_fragments(identifier)
+    candidates = [f for f in fragments if not _is_pure_ion_fragment(f)]
+    if not candidates:
+        return identifier
+
+    best_frag, best_count = candidates[0], -1
+    for frag in candidates:
+        try:
+            count = len(SmilesParser(frag).parse().atoms)
+        except Exception:
+            continue
+        if count > best_count:
+            best_frag, best_count = frag, count
+    return best_frag
+
+
 def _lookup_mof(linker_smiles, metal):
     """
     Look up pore data from MOF_DB.
@@ -169,6 +229,11 @@ def _lookup_mof(linker_smiles, metal):
     and whose metal matches. Prefers exact/minimal entries.
     Returns (LCD_ang, PLD_ang) or None if not found.
     """
+    # linker_smiles is normally the FULL MOF_DB identifier already
+    # (see module docstring above), so try the direct hit first.
+    if linker_smiles in MOF_DB:
+        return MOF_DB[linker_smiles][:2]
+
     # Build candidate identifier strings — try simple metal+linker combos
     candidates = [
         f"{linker_smiles}.[{metal}]",
@@ -206,7 +271,13 @@ class MOFRenderer:
         self.guest_ion    = guest_ion
 
         # ── Step 1: parse and layout linker at natural scale ─────────────
-        self.linker_mol = SmilesParser(linker_smiles).parse()
+        # linker_smiles may be a full multi-component MOF_DB identifier
+        # (metal + linker + counter-ion + extra ligand copies, '.'-joined);
+        # only the actual organic linker fragment should be laid out and
+        # drawn. The untouched original is kept in self.linker_smiles for
+        # the DB pore lookup below, which is keyed by the full identifier.
+        render_smiles = _select_linker_fragment(linker_smiles)
+        self.linker_mol = SmilesParser(render_smiles).parse()
         LayoutEngine(self.linker_mol).layout()
         self._center_linker()
 
@@ -251,11 +322,42 @@ class MOFRenderer:
                 self._guest_ionic_ang, self._guest_hydrated_ang, self._guest_verified = entry
 
     def _center_linker(self):
-        xs = [a.x for a in self.linker_mol.atoms]
-        ys = [a.y for a in self.linker_mol.atoms]
+        atoms = self.linker_mol.atoms
+        if not atoms:
+            return
+
+        # Rotate so the molecule's longest extent lies along local +x.
+        # _draw_linker_between later rotates this whole local frame to
+        # match whichever square/cube edge it's drawn on (horizontal or
+        # vertical) — without this alignment, the force-directed layout's
+        # arbitrary x/y split means the "short" axis could land as the
+        # horizontal bulge on a vertical edge, silently blowing past the
+        # panel-spacing math. Aligning up front guarantees local y is
+        # always the perpendicular (short) extent, so _linker_half_h
+        # below is a true worst-case bulge no matter which edge it's on.
+        best_pair, best_dist2 = None, -1.0
+        for i in range(len(atoms)):
+            for j in range(i + 1, len(atoms)):
+                dx = atoms[i].x - atoms[j].x
+                dy = atoms[i].y - atoms[j].y
+                d2 = dx * dx + dy * dy
+                if d2 > best_dist2:
+                    best_dist2, best_pair = d2, (atoms[i], atoms[j])
+
+        if best_pair is not None and best_dist2 > 1e-6:
+            a, b = best_pair
+            long_angle = math.atan2(b.y - a.y, b.x - a.x)
+            c, s = math.cos(-long_angle), math.sin(-long_angle)
+            for atom in atoms:
+                x, y = atom.x, atom.y
+                atom.x = x * c - y * s
+                atom.y = x * s + y * c
+
+        xs = [a.x for a in atoms]
+        ys = [a.y for a in atoms]
         cx = (max(xs) + min(xs)) / 2
         cy = (max(ys) + min(ys)) / 2
-        for a in self.linker_mol.atoms:
+        for a in atoms:
             a.x -= cx
             a.y -= cy
 
@@ -295,8 +397,13 @@ class MOFRenderer:
         # square panel. We size the gap off the square/cube edges (not the
         # bare center-to-center distance) so the two panels always end up
         # with real, consistent breathing room between them.
-        sq_half_w   = s / 2 + self.metal_r
-        cube_half_w = s / 2 + self.metal_r  # cube's left edge mirrors the square
+        # Include the linker's short-axis half-extent: on a vertical edge
+        # the linker's perpendicular bulge points horizontally, straight
+        # into the gap between panels, and was previously unaccounted for.
+        # (Slightly generous by design — better a touch more whitespace
+        # than a recurring overlap.)
+        sq_half_w   = s / 2 + self.metal_r + self._linker_half_h
+        cube_half_w = s / 2 + self.metal_r + self._linker_half_h  # cube's left edge mirrors the square
 
         gap = max(s * 0.45, PANEL_GAP_PX * self.scale)
 
@@ -310,8 +417,11 @@ class MOFRenderer:
             self._draw_square_simple(sq_cx, self.cy, s, show_guest=guest_in_square)
             self._draw_cube_simple(cb_cx, self.cy, s, show_guest=guest_in_cube)
 
-        if (guest_in_cube or guest_in_square) and self.guest_ion:
-            self._draw_pore_readout(cb_cx, self.cy, s)
+        # Readout text no longer drawn on canvas (was illegible at the
+        # size the turtle display allows) — see get_readout_lines() below,
+        # which the same verdict math now feeds into an HTML info panel
+        # instead. Kept as a public method in case anything still wants
+        # the data from this side.
 
     # ── Square SBU — linker mode ──────────────────────────────────────────────
 
@@ -531,15 +641,14 @@ class MOFRenderer:
         for atom in self.linker_mol.atoms:
             ax, ay = self._transform(atom.x, atom.y, mx, my, angle, mol_scale)
             r      = BASE_RADII.get(atom.symbol, 18) * mol_scale
-            fill, text_col = ATOM_COLORS.get(atom.symbol, DEFAULT_ATOM_COLOR)
+            fill, _ = ATOM_COLORS.get(atom.symbol, DEFAULT_ATOM_COLOR)
             if alpha < 1.0:
                 fill = self._dim_color(fill, alpha)
             self._draw_ball(ax, ay, r, fill)
             if r >= LABEL_MIN_RADIUS * 0.8:
                 fs = self._fit_font(atom.symbol, r)
                 if fs >= 5:
-                    tc = text_col if alpha > 0.6 else "#999999"
-                    self._write_centered(ax, ay, atom.symbol, tc, fs)
+                    self._write_centered(ax, ay, atom.symbol, self._contrast_text_color(fill), fs)
 
     def _transform(self, lx, ly, mx, my, angle, mol_scale):
         sx, sy = lx * mol_scale, ly * mol_scale
@@ -629,11 +738,16 @@ class MOFRenderer:
         # instead of always rendering the same fit-status colour.
         element_symbol = re.match(r"[A-Za-z]+", self.guest_ion or "")
         element_symbol = element_symbol.group(0) if element_symbol else ""
-        ion_fill, ion_text_col = ATOM_COLORS.get(element_symbol, DEFAULT_ATOM_COLOR)
+        ion_fill, _ = ATOM_COLORS.get(element_symbol, DEFAULT_ATOM_COLOR)
 
         t = self.t
 
         # ── Hydration shell ───────────────────────────────────────────────
+        # (No in-canvas label anymore — a turtle arc-text label this small
+        # was never legible. The shell's meaning — and the full pore-fit
+        # readout below — now live in the HTML info panel next to the
+        # canvas; see get_readout_lines() / api/views.py's mirrored
+        # server-side computation.)
         if hydrated_ang is not None and display_hydrated > display_ion + 2:
             t.penup(); t.goto(center_x, center_y - display_hydrated)
             t.pendown()
@@ -641,34 +755,6 @@ class MOFRenderer:
             t.fillcolor("#4A90D9")
             t.begin_fill(); t.circle(display_hydrated); t.end_fill()
             t.penup()
-
-            # Arc text "Hydration Shell" along bottom of shell
-            label    = "Hydration Shell"
-            n        = len(label)
-            annulus  = display_hydrated - display_ion
-            fs_shell = min(max(6, int(annulus * 0.38)), 11)
-            # Place text near the outer edge of the shell (85% of the way out)
-            # so characters have maximum arc radius = maximum spacing
-            label_r  = display_ion + annulus * 0.85
-            char_w   = fs_shell * 1.1
-            char_span = char_w / max(label_r, 1)
-            total_span = char_span * n
-            if total_span > math.radians(160):
-                char_span  = math.radians(160) / n
-                total_span = char_span * n
-            start_ang = -math.pi/2 - total_span/2 + char_span/2
-            t.pencolor("#FFFFFF")
-            saved = t.heading() if hasattr(t, 'heading') else 0
-            for k, ch in enumerate(label):
-                ang  = start_ang + k * char_span
-                t.penup()
-                t.goto(center_x + label_r * math.cos(ang),
-                       center_y + label_r * math.sin(ang))
-                if hasattr(t, 'setheading'):
-                    t.setheading(math.degrees(ang) + 90)
-                t.write(ch, align="center", font=("Arial", fs_shell, "bold"))
-            if hasattr(t, 'setheading'):
-                t.setheading(saved)
 
         # ── Bare ion ──────────────────────────────────────────────────────
         # Fill = element colour (identifies *which* ion this is).
@@ -684,14 +770,23 @@ class MOFRenderer:
         # ball is big enough to hold at least a small label.
         fs = max(6, int(display_ion * 0.55))
         t.goto(center_x, center_y - fs * LABEL_Y_FRACTION)
-        t.pencolor(ion_text_col)
+        t.pencolor(self._contrast_text_color(ion_fill))
         t.write(self.guest_ion, align="center", font=("Arial", fs, "bold"))
 
         # Remember the lowest point this guest ion reaches on screen so
         # the pore-fit readout text (drawn below the cube) can avoid it.
         self._guest_bottom_y = center_y - max(display_ion, display_hydrated)
 
-    def _draw_pore_readout(self, cube_cx, cube_cy, sq_size):
+    def get_readout_lines(self):
+        """
+        Pore-fit readout as data — (text, color) tuples — rather than
+        turtle-drawn canvas text. The equivalent computation also lives
+        server-side in api/views.py (_compute_pore_readout), which is
+        what actually feeds the HTML info panel in the running app;
+        this method exists so the same verdict logic is available
+        directly from Python/MOFRenderer for testing or any other
+        non-web use.
+        """
         ionic_ang    = self._guest_ionic_ang
         hydrated_ang = self._guest_hydrated_ang
         effective_ang = hydrated_ang if hydrated_ang is not None else ionic_ang
@@ -706,43 +801,34 @@ class MOFRenderer:
         else:
             verdict, verdict_col = "TOO LARGE",           "#F85149"
 
-        # Start the readout below whichever is lower: the cube/molecule
-        # itself, or the guest ion ball (large "TOO LARGE" ions and
-        # hydration shells can bulge below the molecule's own footprint
-        # and would otherwise overlap the first line(s) of text).
-        structure_bottom_y = cube_cy - sq_size / 2 - self.metal_r
-        guest_bottom_y = getattr(self, "_guest_bottom_y", structure_bottom_y)
-        bottom_y = min(structure_bottom_y, guest_bottom_y) - 30
         # Pore values are diameters; ion values are radii.
         # For the comparison we use PLD/2 (radius) vs ion radius.
         lines = [
-            (f"Pore LCD (diam.): {self._lcd_ang:.2f} A  →  r = {self._lcd_ang/2:.2f} A", "#8B949E"),
-            (f"Pore PLD (diam.): {self._pld_ang:.2f} A  →  r = {self._pld_ang/2:.2f} A  [fit]", "#8B949E"),
+            (f"Largest Cavity Diameter (LCD): {self._lcd_ang:.2f} \u00c5  \u2192  cavity radius {self._lcd_ang/2:.2f} \u00c5", "#8B949E"),
+            (f"Pore Limiting Diameter (PLD): {self._pld_ang:.2f} \u00c5  \u2192  bottleneck radius {self._pld_ang/2:.2f} \u00c5", "#8B949E"),
         ]
         if effective_ang is not None:
             if ionic_ang is not None:
-                lines.append((f"Ion bare radius:    {ionic_ang:.2f} A", "#8B949E"))
+                lines.append((f"Guest ion radius (bare): {ionic_ang:.2f} \u00c5", "#8B949E"))
             if hydrated_ang is not None:
-                lines.append((f"Ion hydrated radius:{hydrated_ang:.2f} A  vs PLD r={self._pore_fit_ang:.2f} A", "#4A90D9"))
-            lines.append((verdict, verdict_col))
+                lines.append((f"Guest ion radius (hydrated): {hydrated_ang:.2f} \u00c5  vs. PLD bottleneck {self._pore_fit_ang:.2f} \u00c5", "#4A90D9"))
+            # lines.append((verdict, verdict_col))
             src_note = "Exp. verified" if "Experimental" in verified else "Est./unverified"
             lines.append((f"* {src_note} ion radii; pore from MOF_data.csv", "#6E7681"))
-        else:
-            lines.append((verdict, verdict_col))
+        # else:
+        #     lines.append((verdict, verdict_col))
 
-        for i, (text, col) in enumerate(lines):
-            self.t.penup(); self.t.goto(cube_cx, bottom_y - i * 13)
-            self.t.pencolor(col)
-            self.t.write(text, align="center", font=("Arial", 8, "normal"))
+        return lines
 
     # ── Metal ball ────────────────────────────────────────────────────────────
 
     def _draw_metal(self, x, y, small=False):
         r = self.metal_r * (0.72 if small else 1.0)
         t = self.t
+        fill = self.metal_fill if not small else self._dim_color(self.metal_fill, 0.55)
         t.penup(); t.goto(x, y-r); t.pendown()
         t.pencolor("#555555"); t.pensize(1)
-        t.fillcolor(self.metal_fill if not small else self._dim_color(self.metal_fill, 0.55))
+        t.fillcolor(fill)
         t.begin_fill(); t.circle(r); t.end_fill()
         t.penup()
 
@@ -756,7 +842,7 @@ class MOFRenderer:
             suffix = ""
         fs = max(7, int(r * 0.70))
         t.goto(x, y - fs * LABEL_Y_FRACTION)
-        t.pencolor(self.metal_text if not small else self._dim_color(self.metal_text, 0.6))
+        t.pencolor(self._contrast_text_color(fill))
         t.write(self.metal + suffix, align="center", font=("Arial", fs, "bold"))
 
     def _draw_ball(self, x, y, radius, fill_color):
@@ -783,6 +869,23 @@ class MOFRenderer:
         n    = len(label)
         fs   = int(min(side/0.72, side/(0.65*max(n,1))) * LABEL_FONT_SCALE)
         return max(fs, 0)
+
+    @staticmethod
+    def _contrast_text_color(fill_hex):
+        """
+        Pick black or white text based on the fill's luminance, computed
+        AFTER any dimming has already been applied to that fill. This is
+        the fix for corner/ion labels going illegible: previously the
+        fill and its paired text color were each independently dimmed
+        toward white, which mathematically shrinks the gap between them
+        the more dimmed either one gets. Deriving text color from the
+        final fill guarantees a legible label at any alpha, and for any
+        element (known or falling back to DEFAULT_ATOM_COLOR).
+        """
+        h = fill_hex.lstrip("#")
+        r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+        luminance = 0.299 * r + 0.587 * g + 0.114 * b
+        return "#1A1A1A" if luminance > 140 else "#FFFFFF"
 
     @staticmethod
     def _dim_color(hex_color, alpha):
