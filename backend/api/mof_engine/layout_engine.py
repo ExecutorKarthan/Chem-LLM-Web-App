@@ -4,26 +4,14 @@ from ring_layout import RingLayout
 from coordination_geometry import CoordinationGeometry
 
 class LayoutEngine:
-
-
     def __init__(self, mol):
-
         self.mol = mol
-
         self.visited = set()
-
-        self.bond_length = 60
-
-        self.ring_size = 80
-
-
-    # ----------------------------
-    # MAIN ENTRY
-    # ----------------------------
+        self.bond_length = 65  # Increased slightly for clean structural spacing
+        self.ring_size = 85
 
     def layout(self):
-
-        # Ensure every atom has x,y before any relaxation runs
+        # 1. Initialize coordinates to clear undefined state traps
         for atom in self.mol.atoms:
             if not hasattr(atom, 'x'):
                 atom.x = 0.0
@@ -32,284 +20,95 @@ class LayoutEngine:
 
         rings = RingFinder(self.mol).find_rings()
 
+        # Improved initialization: Space out distinct ring groups so they don't pile up at (0,0)
         ring_layout = RingLayout(self.mol)
-        ring_layout.layout_rings(rings)
+        for idx, ring in enumerate(rings):
+            # Stagger initial ring origins linearly down a diagonal layout path
+            shift_x = idx * 50 
+            shift_y = idx * 20
+            ring_layout.layout_rings([ring], cx=shift_x, cy=shift_y)
 
-        # Mark ring atoms as visited so layout_from_atom won't overwrite them
+        # Register initialized ring elements to prevent subsequent overwrite shifts
         for ring in rings:
             for atom in ring:
                 self.visited.add(atom)
 
-        # Place substituents hanging off ring atoms, radially outward
-        for ring in rings:
-            cx = sum(a.x for a in ring) / len(ring)
-            cy = sum(a.y for a in ring) / len(ring)
-            self.layout_ring(ring, cx, cy)
+        # 2. Run depth-first layout sweep from the first root node to align branches/substituents
+        if self.mol.atoms:
+            self.layout_from_atom(self.mol.atoms[0], 0, 0, 0)
 
-        # DFS from first atom to catch any non-ring atoms not yet placed
-        self.layout_from_atom(self.mol.atoms[0], 0, 0, 0)
+        # 3. Perform intensified force relaxation to push overlapping rings cleanly outward
+        self.relax(iterations=150)
 
-
-        self.relax(60)
-
-
+        # Apply specific target metal geometry configuration rules
         CoordinationGeometry(self.mol).apply()
 
-
-    # ----------------------------
-    # RECURSIVE PLACEMENT
-    # ----------------------------
-
     def layout_from_atom(self, atom, x, y, angle):
-
+        """
+        Your engine's native DFS fallback layout router.
+        """
         if atom in self.visited:
-
             return
-
-
+        self.visited.add(atom)
         atom.x = x
-
         atom.y = y
 
-        self.visited.add(atom)
-
-
-        neighbors = self.get_neighbors(atom)
-
+        # Get adjacent neighbors
+        neighbors = [b.b if b.a == atom else b.a for b in self.mol.bonds if b.a == atom or b.b == atom]
         unvisited = [n for n in neighbors if n not in self.visited]
-
         if not unvisited:
             return
 
-        # Spread branches symmetrically around the incoming angle.
-        # 120° step gives correct sp2/sp3 geometry for chains and substituents.
-        angle_step = 2 * math.pi / 3
-
-        for i, n in enumerate(unvisited):
-
-            new_angle = angle + (i - (len(unvisited) - 1) / 2.0) * angle_step
-
-            nx = x + self.bond_length * math.cos(new_angle)
-            ny = y + self.bond_length * math.sin(new_angle)
-
-            self.layout_from_atom(n, nx, ny, new_angle)
-
-
-    # ----------------------------
-    # NEIGHBORS
-    # ----------------------------
-
-    def get_neighbors(self, atom):
-
-        out = []
-
-
-        for b in atom.bonds:
-
-            if b.a == atom:
-
-                out.append(b.b)
-
-            else:
-
-                out.append(b.a)
-
-
-        return out
-
-
-    # ----------------------------
-    # RING DETECTION (simple DFS cycle)
-    # ----------------------------
-
-    def detect_ring(self, start):
-
-        path = []
-
-        visited = set()
-
-
-        result = self._dfs_cycle(start, None, visited, path)
-
-
-        return result
-
-
-    def _dfs_cycle(self, node, parent, visited, path):
-
-        visited.add(node)
-
-        path.append(node)
-
-
-        for b in node.bonds:
-
-
-            nxt = b.b if b.a == node else b.a
-
-
-            if nxt == parent:
-
-                continue
-
-
-            if nxt in path:
-
-                # cycle found
-
-                idx = path.index(nxt)
-
-                return path[idx:]
-
-
-            if nxt not in visited:
-
-                res = self._dfs_cycle(nxt, node, visited, path)
-
-                if res:
-
-                    return res
-
-
-        path.pop()
-
-        return None
-
-
-    # ----------------------------
-    # RING LAYOUT (polygon)
-    # ----------------------------
-
-    def layout_ring(self, ring_atoms, cx, cy):
-
-        n = len(ring_atoms)
-
-        radius = self.ring_size
-
-        for i, atom in enumerate(ring_atoms):
-
-            angle = 2 * math.pi * i / n
-
-            atom.x = cx + radius * math.cos(angle)
-
-            atom.y = cy + radius * math.sin(angle)
-
-            self.visited.add(atom)
-
-        # Place substituents hanging off each ring atom radially outward
-        for atom in ring_atoms:
-
-            # Outward direction from ring center
-            dx = atom.x - cx
-            dy = atom.y - cy
-            dist = math.sqrt(dx*dx + dy*dy) + 0.001
-            ux = dx / dist
-            uy = dy / dist
-
-            # How many substituents need placing?
-            subs = [n for n in self.get_neighbors(atom) if n not in self.visited]
-
-            if not subs:
-                continue
-
-            # Fan substituents around the outward direction
-            # For 1 sub: straight out. For 2: ±30°. For 3: ±60° and straight.
-            n_subs = len(subs)
-            if n_subs == 1:
-                offsets = [0]
-            elif n_subs == 2:
-                offsets = [-math.pi / 6, math.pi / 6]
-            else:
-                offsets = [math.pi * k / (n_subs - 1) - math.pi / 2
-                           for k in range(n_subs)]
-
-            for sub_atom, offset in zip(subs, offsets):
-                out_angle = math.atan2(uy, ux) + offset
-                nx = atom.x + self.bond_length * math.cos(out_angle)
-                ny = atom.y + self.bond_length * math.sin(out_angle)
-                self.layout_from_atom(sub_atom, nx, ny, out_angle)
-
-
-    # ----------------------------
-    # SIMPLE RELAXATION
-    # ----------------------------
-
-    def relax(self, iterations=50):
-
+        num_branches = len(unvisited)
+        spread = 120 if num_branches > 1 else 0
+        start_angle = angle - spread / 2
+
+        for i, neighbor in enumerate(unvisited):
+            branch_angle = start_angle + (i * spread / (num_branches - 1 if num_branches > 1 else 1))
+            rad = math.radians(branch_angle)
+            nx = x + self.bond_length * math.cos(rad)
+            ny = y + self.bond_length * math.sin(rad)
+            self.layout_from_atom(neighbor, nx, ny, branch_angle)
+
+    def relax(self, iterations=150):
         for _ in range(iterations):
-
             self.apply_repulsion()
-
             self.apply_bond_attraction()
 
-
     def apply_repulsion(self):
-
         atoms = self.mol.atoms
-
-
         for i in range(len(atoms)):
-
             for j in range(i + 1, len(atoms)):
-
-
                 a = atoms[i]
-
                 b = atoms[j]
 
-
                 dx = a.x - b.x
-
                 dy = a.y - b.y
-
-
                 dist = math.sqrt(dx * dx + dy * dy) + 0.01
 
-
-                if dist < 80:
-
-                    force = 5 / dist
-
-
-                    a.x += dx / dist * force
-
-                    a.y += dy / dist * force
-
-
-                    b.x -= dx / dist * force
-
-                    b.y -= dy / dist * force
-
+                # If elements belong to bulky rigid aromatic cores, amplify physical space bounds
+                min_distance = 75 if (hasattr(a, 'aromatic') or hasattr(b, 'aromatic')) else 60
+                if dist < min_distance:
+                    force = (min_distance - dist) * 0.45
+                    
+                    a.x += (dx / dist) * force
+                    a.y += (dy / dist) * force
+                    b.x -= (dx / dist) * force
+                    b.y -= (dy / dist) * force
 
     def apply_bond_attraction(self):
-
         for bond in self.mol.bonds:
-
-
             a = bond.a
-
             b = bond.b
 
-
             dx = b.x - a.x
-
             dy = b.y - a.y
-
-
             dist = math.sqrt(dx * dx + dy * dy) + 0.01
 
-
             desired = self.bond_length
+            force = (dist - desired) * 0.25
 
-
-            force = (dist - desired) * 0.05
-
-
-            a.x += dx / dist * force
-
-            a.y += dy / dist * force
-
-
-            b.x -= dx / dist * force
-
-            b.y -= dy / dist * force
+            a.x += (dx / dist) * force
+            a.y += (dy / dist) * force
+            b.x -= (dx / dist) * force
+            b.y -= (dy / dist) * force

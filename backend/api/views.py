@@ -1,6 +1,7 @@
 # Standard library imports
 import time
 import os
+import re
 import uuid
 import json
 import logging
@@ -699,33 +700,101 @@ def _get_parsed_mof_db():
         return {}
 
 
+def _extract_organic_linker(mof_id_smiles):
+    """
+    Splits a composite multi-component SMILES string by '.' and filters
+    out inorganic metal fragments, leaving only the organic linker.
+    """
+    if not mof_id_smiles:
+        return ""
+    fragments = mof_id_smiles.split(".")
+    organic_fragments = []
+    
+    metals_list = [
+        "Ag", "Zn", "Cu", "Fe", "Co", "Ni", "Al", "Cr", "Zr", "Ti", "In", "Mg", "V", 
+        "Sc", "Y", "La", "Ce", "Nd", "Gd", "Lu", "U", "Np", "Pu", "Am", "Ac", "Th", 
+        "Pa", "Li", "Na", "K", "Rb", "Cs", "Be", "Ba", "Sr", "Ca", "Sn", "Pb", "Ga"
+    ]
+    
+    for frag in fragments:
+        is_metal = any(m in frag for m in metals_list)
+        if not is_metal:
+            organic_fragments.append(frag)
+            
+    return ".".join(organic_fragments) if organic_fragments else mof_id_smiles
+
+
 ############################################
 # Dynamic Search and Metadata Catalogs
 ############################################
 @api_view(["GET"])
 def get_mof_meta(request):
+    """
+    Parses the MOF database to extract unique, clean metals and individual linkers
+    by decomposing composite structures/SMILES strings.
+    """
+    # 1. Fetch your parsed MOF database dictionary
     try:
         mof_db = _get_parsed_mof_db()
     except Exception as e:
-        logger.error(f"Error parsing MOF DB: {e}")
-        mof_db = {}
+        return JsonResponse({"error": f"Failed to load MOF data: {str(e)}"}, status=500)
+
+    metals_set = set()
+    linkers_set = set()
+
+    # 2. Loop through the database items
+    # Adjust variables matching your _get_parsed_mof_db() return structure
+    for mof_id, data in mof_db.items():
+        # Expecting data to contain (lcd, pld, metal_type, linkers, etc.)
+        # If your data is a tuple, unpack it cleanly. Example:
+        # lcd, pld, metal_str = data[0], data[1], data[2]
+        
+        # --- 1) EXTRACT & SPLIT METALS ---
+        # Assuming 'metal_type' or the metal field looks like "Zn", "Cu.Zn", or "Cu-PaddleWheel"
+        # We'll use a placeholder variable `metal_source_string` for your metal field:
+        metal_source_string = data[2] if len(data) > 2 else "" 
+        
+        if metal_source_string:
+            # Split by periods, commas, or dashes to isolate individual metal species
+            individual_metals = re.split(r'[\.,\-_]', str(metal_source_string))
+            for metal in individual_metals:
+                clean_metal = metal.strip()
+                if clean_metal:
+                    metals_set.add(clean_metal)
+
+        # --- 2) EXTRACT & SPLIT LINKERS ---
+        # Your linkers field contains long SMILES strings like "SMILES1.SMILES2"
+        # The period '.' in SMILES denotes disconnected structural fragments (separate linkers/salts)
+        linker_source_string = mof_id # or data[some_index] if it's stored inside the values
+        
+        if linker_source_string:
+            # Split the compound SMILES by the period delimiter
+            individual_linkers = str(linker_source_string).split('.')
+            for linker in individual_linkers:
+                clean_linker = linker.strip()
+                # Filter out obvious metal residuals or empty strings left in the SMILES
+                if clean_linker and not re.match(r'^\[[A-Za-z]{1,2}\]$', clean_linker):
+                    linkers_set.add(clean_linker)
+
+    # 3. Format into structured dropdown options for the frontend
+    # This prevents the frontend from choking on massive SMILES blocks
+    formatted_metals = [{"value": metal, "label": metal} for metal in sorted(metals_set)]
     
-    metals = set()
-    linkers = set()
-    for mof_id, (lcd, pld, metal_type) in mof_db.items():
-        if metal_type:
-            for m in [x.strip() for x in metal_type.split(",")]:
-                if m:
-                    metals.add(m)
-        if mof_id and mof_id.strip():
-            linkers.add(mof_id.strip())
+    formatted_linkers = [
+        {
+            "value": smiles, 
+            "label": f"Linker {i+1} ({smiles[:15]}...)"  # Gives a readable label while preserving the raw value
+        } 
+        for i, smiles in enumerate(sorted(linkers_set))
+    ]
 
+    # 4. Return the clean payload
     return JsonResponse({
-        "guest_ions": list(ION_RADII.keys()),
-        "metals": sorted(list(metals)),
-        "linkers": sorted(list(linkers)),
-    }, status=status.HTTP_200_OK)
-
+        "metals": formatted_metals,
+        "linkers": formatted_linkers,
+        "total_unique_metals": len(metals_set),
+        "total_unique_linkers": len(linkers_set)
+    }, safe=False)
 
 @api_view(["POST"])
 def filter_mofs(request):
@@ -738,7 +807,7 @@ def filter_mofs(request):
     except Exception:
         body = {}
 
-    selected_linker = body.get("linker")  # This is the full identifier string from the dropdown
+    selected_linker = body.get("linker")  # Clean linker string coming from input selector dropdown
     selected_metal = body.get("metal")
     selected_ion = body.get("ion")
     tolerance = float(body.get("tolerance", 0.0))
@@ -754,8 +823,11 @@ def filter_mofs(request):
     ion_radius, ion_scaling, _ = ION_RADII.get(selected_ion, (None, None, None))
 
     for identifier, (lcd, pld, metal_str) in mof_db.items():
-        # 1. Match by full identifier token if selected
-        if selected_linker and selected_linker != identifier:
+        # Derive clean comparative linker segment for current row evaluation
+        row_linker = _extract_organic_linker(identifier)
+
+        # 1. Match evaluated criteria against organic segment
+        if selected_linker and selected_linker != row_linker:
             continue
             
         # 2. Match by composition metal token
@@ -775,9 +847,10 @@ def filter_mofs(request):
         else:
             is_viable = True
 
-        # Return standardized keys matching the frontend's expected properties
+        # Return standardized keys matching frontend components
         filtered.append({
-            "identifier": identifier,
+            "identifier": identifier,  # Keeps database lookups stable
+            "linker": row_linker,      # Exposes pure organic data to user grid
             "metals": metal_str,
             "lcd": lcd,
             "pld": pld,
@@ -786,6 +859,7 @@ def filter_mofs(request):
         })
 
     return JsonResponse({"results": filtered}, status=status.HTTP_200_OK)
+
 
 def _compute_pore_readout(lcd, pld, guest_ion):
     """
@@ -812,23 +886,15 @@ def _compute_pore_readout(lcd, pld, guest_ion):
         return [{"text": f"Ion '{guest_ion}' not in database", "color": "#8B949E"}]
 
     ionic_ang, hydrated_ang, verified = entry
-    # effective_ang = hydrated_ang if hydrated_ang is not None else ionic_ang
-
-    # if effective_ang <= pore_fit_ang * 0.80:
-    #     verdict, verdict_col = "FITS  (comfortable)", "#3FB950"
-    # elif effective_ang <= pore_fit_ang:
-    #     verdict, verdict_col = "FITS  (tight)", "#D29922"
-    # else:
-    #     verdict, verdict_col = "TOO LARGE", "#F85149"
 
     lines = [
-        (f"Largest Cavity Diameter (LCD): {lcd_val:.2f} \u00c5  \u2192  cavity radius {lcd_val/2:.2f} \u00c5", "#8B949E"),
-        (f"Pore Limiting Diameter (PLD): {pld_val:.2f} \u00c5  \u2192  bottleneck radius {pore_fit_ang:.2f} \u00c5", "#8B949E"),
-        (f"Guest ion radius (bare): {ionic_ang:.2f} \u00c5", "#8B949E"),
+        (f"Largest Cavity Diameter (LCD): {lcd_val:.2f} \u00c5  \u2192  cavity radius {lcd_val/2:.2f} \u00c5", "#D81B60"),
+        (f"Pore Limiting Diameter (PLD): {pld_val:.2f} \u00c5  \u2192  bottleneck radius {pore_fit_ang:.2f} \u00c5", "#994F00"),
+        (f"Guest ion radius (bare): {ionic_ang:.2f} \u00c5", "#4B0092"),
     ]
     if hydrated_ang is not None:
-        lines.append((f"Guest ion radius (hydrated): {hydrated_ang:.2f} \u00c5  vs. PLD bottleneck {pore_fit_ang:.2f} \u00c5", "#4A90D9"))
-    # lines.append((verdict, verdict_col))
+        lines.append((f"Guest ion radius (hydrated): {hydrated_ang:.2f} \u00c5", "#56B4E9"))
+
     src_note = "Exp. verified" if "Experimental" in verified else "Est./unverified"
     lines.append((f"* {src_note} ion radii; pore from MOF_data.csv", "#6E7681"))
 
@@ -847,7 +913,7 @@ def generate_mof_code(request):
         body = {}
 
     selected_metal = body.get("metal")
-    mof_id = body.get("mof_id")  # Full identifier SMILES string from client
+    mof_id = body.get("mof_id")  # Row reference ID sent up by UI grid row
     guest_ion = body.get("guest_ion")
     simple_mode = body.get("simple_mode", False)
 
@@ -859,7 +925,7 @@ def generate_mof_code(request):
     except Exception as e:
         return JsonResponse({"error": f"Database engine unavailable: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-    # Validate presence in database
+    # Validate row presence in dictionary
     if mof_id not in mof_db:
         return JsonResponse({"error": f"Structure '{mof_id}' not found in asset register."}, status=status.HTTP_404_NOT_FOUND)
 
@@ -875,8 +941,9 @@ def generate_mof_code(request):
     # 1. Compute text readout logs for panel
     readout_data = _compute_pore_readout(lcd, pld, guest_ion)
 
-    # 2. Build Python Turtle canvas script execution lines
-    safe_id = mof_id.replace('"', '\\"')
+    # 2. Extract clean linker for canvas painting
+    clean_linker_smiles = _extract_organic_linker(mof_id)
+    safe_linker = clean_linker_smiles.replace('"', '\\"')
     guest_arg = f"'{guest_ion}'" if guest_ion else "None"
 
     code_lines = [
@@ -885,32 +952,28 @@ def generate_mof_code(request):
         "t_obj = turtle.Turtle()",
         "t_obj.speed(0)",
         "t_obj.hideturtle()",
-        f"renderer = MOFRenderer(t_obj, metal=\"{selected_metal}\", linker_smiles=\"{safe_id}\", guest_ion={guest_arg})",
+        f"renderer = MOFRenderer(t_obj, metal=\"{selected_metal}\", linker_smiles=\"{safe_linker}\", guest_ion={guest_arg})",
     ]
 
     if simple_mode:
-        code_lines.append("renderer.draw_simple_without_guest()")
+        code_lines.append("renderer.draw_simple_with_guest()")
     else:
-        code_lines.append(f"renderer.draw_with_guest()")
+        code_lines.append("renderer.draw_with_guest()")
 
     compiled_script = "\n".join(code_lines)
 
-    # Return clean structural payloads to front-end async listener
     return JsonResponse({
         "code": compiled_script,
         "readout": readout_data
     }, status=status.HTTP_200_OK)
 
 
-# Locate this section near the end of your backend views.py:
 @api_view(["GET"])
-# Ensure your standard session protection remains active (e.g., IsAuthenticated or your cookie validation framework)
 def get_mof_engine_file(request, filename):
     """
     Streams engine files securely to the Skulpt browser interpreter
     by checking requests against an explicit whitelist register.
     """
-    # 1. Maintain the explicit filename registry protection
     whitelist = [
         "smiles_lexer.py", "smiles_parser.py", "layout_engine.py",
         "ring_utils.py", "ring_layout.py", "coordination_geometry.py", 
@@ -947,6 +1010,5 @@ def get_mof_engine_file(request, filename):
             print(f"  -> {p.resolve()}")
         return HttpResponse(f"# Error: Engine file {filename} not found on server storage.", status=404, content_type="text/x-python")
 
-    # 2. Streams the code layout payload under existing security headers
     response = HttpResponse(open(filepath, 'rb').read(), content_type='text/x-python')
     return response

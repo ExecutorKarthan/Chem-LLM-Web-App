@@ -1,4 +1,3 @@
-// MOFInput.tsx
 import React, { useState, useEffect } from "react";
 import { Select, Button, Switch, Alert, Radio, Form } from "antd";
 import axios from "axios";
@@ -9,16 +8,19 @@ export interface ReadoutLine {
   color: string;
 }
 
+// Define the shape of our new metadata items coming from the backend
+interface MetaOption {
+  value: string;
+  label: string;
+}
+
 interface MOFInputProps {
   onCodeReady: (code: string) => void;
-  // Pore-fit readout for the current selection, computed server-side in
-  // generate_mof_code — feeds MofReadoutPanel.tsx. Optional so existing
-  // callers that only care about the Skulpt code keep working unchanged.
   onReadout?: (lines: ReadoutLine[]) => void;
 }
 
 interface MofResult {
-  identifier: string,
+  identifier: string;
   mof_id: string;
   metal: string;
   lcd: number;
@@ -28,8 +30,10 @@ interface MofResult {
 export const MOFInput: React.FC<MOFInputProps> = ({ onCodeReady, onReadout }) => {
   // Metadata options from server
   const [guestIons, setGuestIons] = useState<string[]>([]);
-  const [allMetals, setAllMetals] = useState<string[]>([]);
-  const [allLinkers, setAllLinkers] = useState<string[]>([]);
+  
+  // FIXED: Changed type definitions from string[] to MetaOption[]
+  const [allMetals, setAllMetals] = useState<MetaOption[]>([]);
+  const [allLinkers, setAllLinkers] = useState<MetaOption[]>([]);
   
   // Selection states
   const [searchMode, setSearchMode] = useState<"metalFirst" | "linkerFirst">("metalFirst");
@@ -43,19 +47,24 @@ export const MOFInput: React.FC<MOFInputProps> = ({ onCodeReady, onReadout }) =>
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Filtered dropdown possibilities
-  const [filteredLinkers, setFilteredLinkers] = useState<string[]>([]);
-  const [filteredMetals, setFilteredMetals] = useState<string[]>([]);
+  // FIXED: Changed filter types to handle MetaOption objects
+  const [filteredLinkers, setFilteredLinkers] = useState<MetaOption[]>([]);
+  const [filteredMetals, setFilteredMetals] = useState<MetaOption[]>([]);
 
   // 1. Bootstrapping initial lists
   useEffect(() => {
     axios.get(`${BACKEND_URL}/api/mof-meta/`)
       .then((res) => {
         setGuestIons(res.data.guest_ions || []);
-        setAllMetals(res.data.metals || []);
-        setAllLinkers(res.data.linkers || []);
-        setFilteredLinkers(res.data.linkers || []);
-        setFilteredMetals(res.data.metals || []);
+        
+        // FIXED: The backend already formats these perfectly as [{value, label}]
+        const metalsData = res.data.metals || [];
+        const linkersData = res.data.linkers || [];
+
+        setAllMetals(metalsData);
+        setAllLinkers(linkersData);
+        setFilteredLinkers(linkersData);
+        setFilteredMetals(metalsData);
       })
       .catch((err) => {
         setError("Failed to fetch MOF asset catalog from server.");
@@ -67,29 +76,34 @@ export const MOFInput: React.FC<MOFInputProps> = ({ onCodeReady, onReadout }) =>
     if (searchMode === "metalFirst" && selectedMetal) {
       axios.post(`${BACKEND_URL}/api/mof-filter/`, { metal: selectedMetal })
         .then((res) => {
-          const validLinkers = res.data.results.map((r: MofResult) => r.identifier || r.mof_id);
-          setFilteredLinkers(validLinkers);
-          // Auto-clear or adjust second field if current choice is invalid
-          if (selectedLinker && !validLinkers.includes(selectedLinker)) {
+          const validLinkerValues = res.data.results.map((r: MofResult) => r.identifier || r.mof_id);
+          
+          // FIXED: Filter out objects from allLinkers whose value property matches our search constraints
+          const matchedLinkers = allLinkers.filter(l => validLinkerValues.includes(l.value));
+          setFilteredLinkers(matchedLinkers);
+          
+          if (selectedLinker && !validLinkerValues.includes(selectedLinker)) {
             setSelectedLinker(undefined);
           }
         });
     } else if (searchMode === "linkerFirst" && selectedLinker) {
       axios.post(`${BACKEND_URL}/api/mof-filter/`, { linker: selectedLinker })
         .then((res) => {
-          // Collect structural metals from results
-          const validMetals = new Set<string>();
+          const validMetalValues = new Set<string>();
           res.data.results.forEach((r: MofResult) => {
-            r.metal.split(",").forEach(m => validMetals.add(m.trim()));
+            r.metal.split(",").forEach(m => validMetalValues.add(m.trim()));
           });
-          const metalArray = Array.from(validMetals);
-          setFilteredMetals(metalArray);
-          if (selectedMetal && !metalArray.includes(selectedMetal)) {
+          
+          // FIXED: Filter out items from allMetals whose value matches the filter criteria
+          const matchedMetals = allMetals.filter(m => validMetalValues.has(m.value));
+          setFilteredMetals(matchedMetals);
+          
+          if (selectedMetal && !validMetalValues.has(selectedMetal)) {
             setSelectedMetal(undefined);
           }
         });
     }
-  }, [selectedMetal, selectedLinker, searchMode]);
+  }, [selectedMetal, selectedLinker, searchMode, allMetals, allLinkers]);
 
   const handleReset = () => {
     setSelectedMetal(undefined);
@@ -99,35 +113,34 @@ export const MOFInput: React.FC<MOFInputProps> = ({ onCodeReady, onReadout }) =>
   };
 
   const handleGenerate = async () => {
-      if (!selectedMetal || !selectedLinker) return;
-      setLoading(true);
-      // Use undefined here to match the component's state type declaration
-      setError(undefined); 
+    if (!selectedMetal || !selectedLinker) return;
+    setLoading(true);
+    setError(null); 
 
-      try {
-        const response = await axios.post(`${BACKEND_URL}/api/mof-generate/`, {
-          metal: selectedMetal,
-          mof_id: selectedLinker, // The full identifier string from column 1
-          guest_ion: showGuest ? guestIon : null,
-          simple_mode: simpleMode,
-        });
-        
-        if (response.data.code) {
-          onCodeReady(response.data.code);
-        } else {
-          setError("Server response did not include execution code.");
-        }
-        
-        if (onReadout) {
-          onReadout(response.data.readout || []);
-        }
-      } catch (err: any) {
-        console.error("Visualization error:", err);
-        setError(err.response?.data?.error || "Error executing visualization engine script.");
-      } finally {
-        setLoading(false);
+    try {
+      const response = await axios.post(`${BACKEND_URL}/api/mof-generate/`, {
+        metal: selectedMetal,
+        mof_id: selectedLinker, 
+        guest_ion: showGuest ? guestIon : null,
+        simple_mode: simpleMode,
+      });
+      
+      if (response.data.code) {
+        onCodeReady(response.data.code);
+      } else {
+        setError("Server response did not include execution code.");
       }
-    };
+      
+      if (onReadout) {
+        onReadout(response.data.readout || []);
+      }
+    } catch (err: any) {
+      console.error("Visualization error:", err);
+      setError(err.response?.data?.error || "Error executing visualization engine script.");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   return (
     <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 16, maxWidth: 400 }}>
@@ -156,7 +169,8 @@ export const MOFInput: React.FC<MOFInputProps> = ({ onCodeReady, onReadout }) =>
             placeholder="Select coordinated center element"
             value={selectedMetal}
             onChange={setSelectedMetal}
-            options={(searchMode === "metalFirst" ? allMetals : filteredMetals).map((m) => ({ value: m, label: m }))}
+            // FIXED: Removed .map() entirely! Ant Select natively takes the object arrays directly now.
+            options={searchMode === "metalFirst" ? allMetals : filteredMetals}
             disabled={searchMode === "linkerFirst" && !selectedLinker}
           />
         </Form.Item>
@@ -168,7 +182,8 @@ export const MOFInput: React.FC<MOFInputProps> = ({ onCodeReady, onReadout }) =>
             placeholder="Select coordinated linker scaffold"
             value={selectedLinker}
             onChange={setSelectedLinker}
-            options={(searchMode === "linkerFirst" ? allLinkers : filteredLinkers).map((l) => ({ value: l, label: l }))}
+            // FIXED: Removed .map() entirely here as well.
+            options={searchMode === "linkerFirst" ? allLinkers : filteredLinkers}
             disabled={searchMode === "metalFirst" && !selectedMetal}
           />
         </Form.Item>
@@ -213,5 +228,4 @@ export const MOFInput: React.FC<MOFInputProps> = ({ onCodeReady, onReadout }) =>
   );
 };
 
-// Export component for use
 export default MOFInput;
