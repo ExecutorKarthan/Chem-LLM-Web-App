@@ -1,89 +1,152 @@
 import csv
 import os
 import re
+import time
+import pubchempy as pcp
 
-# --- PATH CONFIGURATIONS ---
-# This finds the directory where mof_registry_builder.py actually lives
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 
-SOURCE_CSV_PATH = os.path.join(CURRENT_DIR, "MOF_data.csv")
-OUTPUT_LINKER_CSV = os.path.join(CURRENT_DIR, "registry_by_linkers.csv")
-OUTPUT_METAL_CSV = os.path.join(CURRENT_DIR, "registry_by_metals.csv")
+SOURCE_CSV = os.path.join(CURRENT_DIR, "MOF_data.csv")
+OUTPUT_LINKERS = os.path.join(CURRENT_DIR, "registry_by_linkers.csv")
+OUTPUT_METALS = os.path.join(CURRENT_DIR, "registry_by_metals.csv")
 
-def clean_and_split_metals(metal_str):
-    if not metal_str:
-        return []
-    raw_splits = re.split(r'[\.,\-_]', str(metal_str))
-    return [m.strip() for m in raw_splits if m.strip()]
+# Bracket-atom elements that belong to a linker's own SMILES (e.g. [O-], [CH], [NH2])
+# rather than representing a metal center.
+NON_METAL_BRACKET_ELEMENTS = {
+    "H", "C", "N", "O", "S", "P", "F", "Cl", "Br", "I", "Se", "Si", "B", "As", "Te"
+}
 
-def clean_and_split_linkers(mof_id_str):
-    if not mof_id_str:
-        return []
-    return [l.strip() for l in str(mof_id_str).split('.') if l.strip() and not re.match(r'^\[[A-Za-z]{1,2}\]$', l)]
+_BRACKET_RE = re.compile(r"\[[^\]]*\]")
+_BRACKET_ATOM_RE = re.compile(r"\[([A-Z][a-z]?)")
 
-def build_split_registries():
-    print(f"🔄 Processing raw entries from: {CURRENT_DIR}...")
-    print(f"🔄 Processing raw entries from: {SOURCE_CSV_PATH}...")
-    
-    if not os.path.exists(SOURCE_CSV_PATH):
-        print(f"❌ Error: Source file not found at {SOURCE_CSV_PATH}")
+
+def classify_fragment(fragment: str):
+    """
+    Classifies one dot-separated formula fragment as:
+      ("metal", [elements])  - a metal atom or metal-oxo cluster
+      ("organic", fragment)  - a real linker (has a carbon skeleton)
+      ("guest", fragment)    - solvent / counter-ion / other non-linker species
+    """
+    fragment = fragment.strip()
+    if not fragment:
+        return ("guest", fragment)
+
+    stripped = _BRACKET_RE.sub("", fragment)
+    residual_letters = re.sub(r"[^A-Za-z]", "", stripped)
+
+    if "C" in residual_letters or "c" in residual_letters:
+        return ("organic", fragment)
+
+    if not residual_letters:
+        atoms = _BRACKET_ATOM_RE.findall(fragment)
+        metal_atoms = [a for a in atoms if a not in NON_METAL_BRACKET_ELEMENTS]
+        if metal_atoms:
+            return ("metal", metal_atoms)
+        return ("guest", fragment)
+
+    return ("guest", fragment)
+
+
+def get_pubchem_common_name(smiles):
+    if not smiles or not smiles.strip():
+        return ""
+    try:
+        compounds = pcp.get_compounds(smiles, namespace="smiles")
+        if compounds:
+            if compounds[0].synonyms:
+                return compounds[0].synonyms[0]
+            elif compounds[0].iupac_name:
+                return compounds[0].iupac_name
+    except Exception as e:
+        print(f"  -> Warning: Could not fetch name for {smiles} ({e})")
+    return ""
+
+
+def build_registries():
+    if not os.path.exists(SOURCE_CSV):
+        print(f"Missing {SOURCE_CSV}")
         return
 
-    # Intermediate tracking sets to prevent duplicate relational pairs
-    linker_to_metals_map = {}
-    metal_to_linkers_map = {}
+    # linker_smiles -> {"metals": set(), "mof_ids": set()}
+    linker_registry = {}
+    # metal -> {"linkers": set(), "mof_ids": set()}
+    metal_registry = {}
+    unique_linkers = set()
 
-    with open(SOURCE_CSV_PATH, mode='r', encoding='utf-8-sig') as f:
-        reader = csv.DictReader(f)
+    print("Step 1: Parsing MOF data, classifying fragments, scoping to mono-metal/mono-linker rows...")
+    with open(SOURCE_CSV, encoding="utf-8-sig", newline="") as f:
+        reader = csv.reader(f)
+        next(reader)  # header
+
         for row in reader:
-            mof_id = row.get("mof_id") or row.get("identifier") or ""
-            metal_field = row.get("metal") or row.get("metal_type") or ""
-            
-            metals = clean_and_split_metals(metal_field)
-            linkers = clean_and_split_linkers(mof_id)
-            
-            for l in linkers:
-                if l not in linker_to_metals_map:
-                    linker_to_metals_map[l] = set()
-                for m in metals:
-                    linker_to_metals_map[l].add(m)
+            if not row or not row[0].strip():
+                continue
 
-            for m in metals:
-                if m not in metal_to_linkers_map:
-                    metal_to_linkers_map[m] = set()
-                for l in linkers:
-                    metal_to_linkers_map[m].add(l)
+            formula = row[0]  # this IS the mof_id
+            metal_elements = set()
+            organic_fragments = []
 
-    os.makedirs("assets", exist_ok=True)
+            for component in formula.split("."):
+                kind, value = classify_fragment(component)
+                if kind == "metal":
+                    metal_elements.update(value)
+                elif kind == "organic":
+                    organic_fragments.append(value)
+                # "guest" fragments (solvents, counter-ions) are ignored
 
-    # 1. WRITE SHEET 1: Linkers -> Common Names -> Interacting Metals
-    with open(OUTPUT_LINKER_CSV, mode='w', encoding='utf-8', newline='') as f1:
-        writer1 = csv.writer(f1)
-        writer1.writerow(["linker_smiles", "linker_common_name", "compatible_metals"])
-        
-        for smiles in sorted(linker_to_metals_map.keys()):
-            common_name = COMMON_NAME_REGISTRY.get(smiles, f"Linker ({smiles[:12]}...)")
-            # Join metals into a clean comma-separated string for that linker's row
-            metals_str = ", ".join(sorted(linker_to_metals_map[smiles]))
-            writer1.writerow([smiles, common_name, metals_str])
+            # Scope: mono-metal AND mono-linker MOFs only.
+            if len(metal_elements) != 1 or len(organic_fragments) != 1:
+                continue
 
-    # 2. WRITE SHEET 2 (The Reverse Map): Metals -> Interacting Linkers -> Common Names
-    with open(OUTPUT_METAL_CSV, mode='w', encoding='utf-8', newline='') as f2:
-        writer2 = csv.writer(f2)
-        writer2.writerow(["metal", "compatible_linkers_smiles", "compatible_linkers_common_names"])
-        
-        for metal in sorted(metal_to_linkers_map.keys()):
-            linkers_list = sorted(metal_to_linkers_map[metal])
-            common_names_list = [COMMON_NAME_REGISTRY.get(l, f"Linker ({l[:12]}...)") for l in linkers_list]
-            
-            writer2.writerow([
-                metal, 
-                ", ".join(linkers_list), 
-                ", ".join(common_names_list)
+            metal = next(iter(metal_elements))
+            linker = organic_fragments[0]
+            unique_linkers.add(linker)
+
+            linker_registry.setdefault(linker, {"metals": set(), "mof_ids": set()})
+            linker_registry[linker]["metals"].add(metal)
+            linker_registry[linker]["mof_ids"].add(formula)
+
+            metal_registry.setdefault(metal, {"linkers": set(), "mof_ids": set()})
+            metal_registry[metal]["linkers"].add(linker)
+            metal_registry[metal]["mof_ids"].add(formula)
+
+    print(f"Found {len(unique_linkers)} unique mono-linker linkers across mono-metal MOFs.")
+    print("Step 2: Fetching common names from PubChem (this may take a moment)...")
+
+    common_names_cache = {}
+    for i, linker in enumerate(sorted(unique_linkers), 1):
+        print(f"  [{i}/{len(unique_linkers)}] Querying: {linker}")
+        common_names_cache[linker] = get_pubchem_common_name(linker)
+        time.sleep(0.2)
+
+    print("Step 3: Writing output files...")
+    with open(OUTPUT_LINKERS, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["linker_smiles", "common_name", "compatible_metals", "mof_ids"])
+        for linker, info in sorted(linker_registry.items()):
+            writer.writerow([
+                linker,
+                common_names_cache.get(linker, ""),
+                ", ".join(sorted(info["metals"])),
+                "; ".join(sorted(info["mof_ids"])),
             ])
 
-    print(f"✅ Success! Created Linker Map: {OUTPUT_LINKER_CSV}")
-    print(f"✅ Success! Created Reverse Metal Map: {OUTPUT_METAL_CSV}")
+    with open(OUTPUT_METALS, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["metal", "compatible_linkers", "common_names", "mof_ids"])
+        for metal, info in sorted(metal_registry.items()):
+            linkers = sorted(info["linkers"])
+            names = [common_names_cache.get(l, "") for l in linkers]
+            writer.writerow([
+                metal,
+                ", ".join(linkers),
+                ", ".join(names),
+                "; ".join(sorted(info["mof_ids"])),
+            ])
+
+    print(f"Created {OUTPUT_LINKERS}")
+    print(f"Created {OUTPUT_METALS}")
+
 
 if __name__ == "__main__":
-    build_split_registries()
+    build_registries()

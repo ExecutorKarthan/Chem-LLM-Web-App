@@ -36,6 +36,10 @@ const ChemApp = () => {
   const [mofCode, setMofCode] = useState<string>("");
   const [mofReadout, setMofReadout] = useState<ReadoutLine[]>([]);
 
+  // --- CONTROL HOOK STATES ---
+  const [showSkulptCanvas, setShowSkulptCanvas] = useState<boolean>(false);
+  const [activeDropdownLinker, setActiveDropdownLinker] = useState<string>("");
+
   const beginRequest = () => {
     setLoading(true);
     setResponse("");
@@ -164,7 +168,16 @@ const ChemApp = () => {
           <span style={{ fontSize: 13, color: linkerViewerMode ? "#aaa" : "#333", fontWeight: 500 }}>
             MOF Explorer
           </span>
-          <Switch checked={linkerViewerMode} onChange={setLinkerViewerMode} />
+          <Switch 
+            checked={linkerViewerMode} 
+            onChange={(checked) => {
+              setLinkerViewerMode(checked);
+              setMofCode("");
+              setMofReadout([]);
+              setShowSkulptCanvas(false); 
+              setActiveDropdownLinker("");
+            }} 
+          />
           <span style={{ fontSize: 13, color: linkerViewerMode ? "#333" : "#aaa", fontWeight: 500 }}>
             Linker Viewer
           </span>
@@ -181,7 +194,12 @@ const ChemApp = () => {
           {linkerViewerMode ? (
             <SmilesInput onSubmitSmiles={handleSubmitSmiles} />
           ) : (
-            <MOFInput onCodeReady={setMofCode} onReadout={setMofReadout} />
+            <MOFInput 
+              onCodeReady={setMofCode} 
+              onReadout={setMofReadout} 
+              setShowSkulpt={setShowSkulptCanvas}
+              onLinkerSelect={setActiveDropdownLinker} // Pipes chosen select box option into parent layout state
+            />
           )}
         </Col>
         <Col xs={24} md={12} style={colStyle({ overflowY: "auto" })}>
@@ -191,10 +209,19 @@ const ChemApp = () => {
               substructure={submittedSubstructure}
             />
           ) : (
-            <>
-              <SkulptDisplay code={mofCode} />
-              <MofReadoutPanel lines={mofReadout} />
-            </>
+            /* MOF Explorer View Render Decision Split */
+            showSkulptCanvas ? (
+              <div id="skulpt-canvas-container" style={{ width: "100%" }}>
+                <SkulptDisplay code={mofCode} />
+                <MofReadoutPanel lines={mofReadout} />
+              </div>
+            ) : (
+              /* If compute hasn't run yet, load MoleculeViewer with the currently selected dropdown linker */
+              <MoleculeViewer
+                smiles={activeDropdownLinker ? [activeDropdownLinker] : []}
+                substructure=""
+              />
+            )
           )}
         </Col>
       </Row>

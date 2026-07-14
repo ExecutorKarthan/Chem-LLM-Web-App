@@ -8,7 +8,6 @@ export interface ReadoutLine {
   color: string;
 }
 
-// Define the shape of our new metadata items coming from the backend
 interface MetaOption {
   value: string;
   label: string;
@@ -17,88 +16,84 @@ interface MetaOption {
 interface MOFInputProps {
   onCodeReady: (code: string) => void;
   onReadout?: (lines: ReadoutLine[]) => void;
+  setShowSkulpt: (show: boolean) => void;
+  onLinkerSelect?: (smiles: string) => void;
 }
 
 interface MofResult {
   identifier: string;
   mof_id: string;
-  metal: string;
+  metals: string; 
   lcd: number;
   pld: number;
 }
 
-export const MOFInput: React.FC<MOFInputProps> = ({ onCodeReady, onReadout }) => {
-  // Metadata options from server
+export const MOFInput: React.FC<MOFInputProps> = ({ onCodeReady, onReadout, setShowSkulpt, onLinkerSelect }) => {
   const [guestIons, setGuestIons] = useState<string[]>([]);
-  
-  // FIXED: Changed type definitions from string[] to MetaOption[]
   const [allMetals, setAllMetals] = useState<MetaOption[]>([]);
   const [allLinkers, setAllLinkers] = useState<MetaOption[]>([]);
   
-  // Selection states
   const [searchMode, setSearchMode] = useState<"metalFirst" | "linkerFirst">("metalFirst");
   const [selectedMetal, setSelectedMetal] = useState<string | undefined>(undefined);
   const [selectedLinker, setSelectedLinker] = useState<string | undefined>(undefined);
   const [guestIon, setGuestIon] = useState<string>("Li+");
   
-  // Toggles
   const [showGuest, setShowGuest] = useState<boolean>(true);
   const [simpleMode, setSimpleMode] = useState<boolean>(false);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
-  // FIXED: Changed filter types to handle MetaOption objects
   const [filteredLinkers, setFilteredLinkers] = useState<MetaOption[]>([]);
   const [filteredMetals, setFilteredMetals] = useState<MetaOption[]>([]);
 
-  // 1. Bootstrapping initial lists
+  // 1. Initial Load: Filter labels to show pure SMILES only
   useEffect(() => {
     axios.get(`${BACKEND_URL}/api/mof-meta/`)
       .then((res) => {
         setGuestIons(res.data.guest_ions || []);
-        
-        // FIXED: The backend already formats these perfectly as [{value, label}]
-        const metalsData = res.data.metals || [];
-        const linkersData = res.data.linkers || [];
+        setAllMetals(res.data.metals || []);
+        setFilteredMetals(res.data.metals || []);
 
-        setAllMetals(metalsData);
-        setAllLinkers(linkersData);
-        setFilteredLinkers(linkersData);
-        setFilteredMetals(metalsData);
+        // FORCE display labels to be the pure SMILES formula string
+        const smilesOnlyLinkers = (res.data.linkers || []).map((l: MetaOption) => ({
+          value: l.value,
+          label: l.value 
+        }));
+
+        setAllLinkers(smilesOnlyLinkers);
+        setFilteredLinkers(smilesOnlyLinkers);
       })
-      .catch((err) => {
-        setError("Failed to fetch MOF asset catalog from server.");
-      });
+      .catch(() => setError("Failed to fetch initial MOF database elements."));
   }, []);
 
-  // 2. Fetch cascading options when selection changes
+  // 2. Cross-Filtering Trigger Core
   useEffect(() => {
     if (searchMode === "metalFirst" && selectedMetal) {
-      axios.post(`${BACKEND_URL}/api/mof-filter/`, { metal: selectedMetal })
+      axios.get(`${BACKEND_URL}/api/mof-filter/`, { params: { metal: selectedMetal } })
         .then((res) => {
-          const validLinkerValues = res.data.results.map((r: MofResult) => r.identifier || r.mof_id);
+          const validLinkers = res.data.results.map((r: MofResult) => r.identifier || r.mof_id);
+          const matched = allLinkers.filter(l => validLinkers.includes(l.value));
+          setFilteredLinkers(matched);
           
-          // FIXED: Filter out objects from allLinkers whose value property matches our search constraints
-          const matchedLinkers = allLinkers.filter(l => validLinkerValues.includes(l.value));
-          setFilteredLinkers(matchedLinkers);
-          
-          if (selectedLinker && !validLinkerValues.includes(selectedLinker)) {
+          if (selectedLinker && !validLinkers.includes(selectedLinker)) {
             setSelectedLinker(undefined);
+            if (onLinkerSelect) onLinkerSelect("");
           }
         });
-    } else if (searchMode === "linkerFirst" && selectedLinker) {
-      axios.post(`${BACKEND_URL}/api/mof-filter/`, { linker: selectedLinker })
+    } 
+    else if (searchMode === "linkerFirst" && selectedLinker) {
+      axios.get(`${BACKEND_URL}/api/mof-filter/`, { params: { linker: selectedLinker } })
         .then((res) => {
-          const validMetalValues = new Set<string>();
+          const validMetals = new Set<string>();
           res.data.results.forEach((r: MofResult) => {
-            r.metal.split(",").forEach(m => validMetalValues.add(m.trim()));
+            if (r.metals) {
+              r.metals.split(/[\.,\-_]/).forEach(m => validMetals.add(m.trim()));
+            }
           });
+          const matched = allMetals.filter(m => validMetals.has(m.value));
+          setFilteredMetals(matched);
           
-          // FIXED: Filter out items from allMetals whose value matches the filter criteria
-          const matchedMetals = allMetals.filter(m => validMetalValues.has(m.value));
-          setFilteredMetals(matchedMetals);
-          
-          if (selectedMetal && !validMetalValues.has(selectedMetal)) {
+          if (selectedMetal && !validMetals.has(selectedMetal)) {
             setSelectedMetal(undefined);
           }
         });
@@ -110,6 +105,8 @@ export const MOFInput: React.FC<MOFInputProps> = ({ onCodeReady, onReadout }) =>
     setSelectedLinker(undefined);
     setFilteredLinkers(allLinkers);
     setFilteredMetals(allMetals);
+    setShowSkulpt(false); 
+    if (onLinkerSelect) onLinkerSelect(""); 
   };
 
   const handleGenerate = async () => {
@@ -120,78 +117,71 @@ export const MOFInput: React.FC<MOFInputProps> = ({ onCodeReady, onReadout }) =>
     try {
       const response = await axios.post(`${BACKEND_URL}/api/mof-generate/`, {
         metal: selectedMetal,
-        mof_id: selectedLinker, 
+        linker: selectedLinker, // Changed key name from 'mof_id' to 'linker'
         guest_ion: showGuest ? guestIon : null,
         simple_mode: simpleMode,
       });
       
       if (response.data.code) {
         onCodeReady(response.data.code);
+        setShowSkulpt(true); 
       } else {
-        setError("Server response did not include execution code.");
+        setError("Execution bundle missing code tracks.");
       }
       
       if (onReadout) {
         onReadout(response.data.readout || []);
       }
     } catch (err: any) {
-      console.error("Visualization error:", err);
-      setError(err.response?.data?.error || "Error executing visualization engine script.");
+      setError(err.response?.data?.error || "Error compiling core structural generation files.");
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 16, maxWidth: 400 }}>
-      <h3>MOF Configuration Engine</h3>
-      {error && <Alert message={error} type="error" showIcon closable />}
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <h3>MOF Configurator</h3>
+      {error && <Alert message={error} type="error" showIcon closable onClose={() => setError(null)} />}
 
       <Form layout="vertical">
-        {/* Toggle Filtering Strategy */}
-        <Form.Item label="Search Workflow Constraints">
-          <Radio.Group 
-            value={searchMode} 
-            onChange={(e) => {
-              setSearchMode(e.target.value);
-              handleReset();
-            }}
-          >
+        <Form.Item label="Search Priority Type">
+          <Radio.Group value={searchMode} onChange={(e) => { setSearchMode(e.target.value); handleReset(); }}>
             <Radio.Button value="metalFirst">Filter by Metal first</Radio.Button>
             <Radio.Button value="linkerFirst">Filter by Linker first</Radio.Button>
           </Radio.Group>
         </Form.Item>
 
-        {/* Dropdown 1: Metal Node Selection */}
-        <Form.Item label="Metal Secondary Building Unit (SBU)">
+        <Form.Item label="Metal Core Selection">
           <Select
             showSearch
-            placeholder="Select coordinated center element"
+            placeholder="Select a metal"
             value={selectedMetal}
             onChange={setSelectedMetal}
-            // FIXED: Removed .map() entirely! Ant Select natively takes the object arrays directly now.
             options={searchMode === "metalFirst" ? allMetals : filteredMetals}
             disabled={searchMode === "linkerFirst" && !selectedLinker}
+            optionFilterProp="label"
           />
         </Form.Item>
 
-        {/* Dropdown 2: Linker Molecule Selection */}
-        <Form.Item label="Organic Structural Linker (SMILES)">
+        <Form.Item label="Organic Structural Linker (SMILES Only)">
           <Select
             showSearch
-            placeholder="Select coordinated linker scaffold"
+            placeholder="Select a linker SMILES"
             value={selectedLinker}
-            onChange={setSelectedLinker}
-            // FIXED: Removed .map() entirely here as well.
+            onChange={(value) => {
+              setSelectedLinker(value);
+              if (onLinkerSelect) onLinkerSelect(value); 
+            }}
             options={searchMode === "linkerFirst" ? allLinkers : filteredLinkers}
             disabled={searchMode === "metalFirst" && !selectedMetal}
+            optionFilterProp="label"
           />
         </Form.Item>
 
-        {/* Guest Ion Configuration */}
         <div style={{ margin: "8px 0 16px 0", borderTop: "1px solid #eee", paddingTop: 12 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-            <span style={{ fontSize: 13, fontWeight: 500 }}>Simulate Interstitial Guest Ion</span>
+            <span style={{ fontSize: 13, fontWeight: 500 }}>Simulate Guest Ion</span>
             <Switch checked={showGuest} onChange={setShowGuest} size="small" />
           </div>
           {showGuest && (
@@ -199,29 +189,21 @@ export const MOFInput: React.FC<MOFInputProps> = ({ onCodeReady, onReadout }) =>
               showSearch
               value={guestIon}
               onChange={setGuestIon}
-              style={{ width: "100%" }}
               options={guestIons.map((ion) => ({ value: ion, label: ion }))}
-              placeholder="Select structural guest ion archetype"
             />
           )}
         </div>
 
-        {/* Presentation Rendering Option */}
         <div style={{ borderTop: "1px solid #eee", paddingTop: 12, display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
-          <span style={{ fontSize: 12, fontWeight: 500 }}>Simple geometric path rendering</span>
+          <span style={{ fontSize: 12, fontWeight: 500 }}>Simple path rendering</span>
           <Switch checked={simpleMode} onChange={setSimpleMode} size="small" />
         </div>
 
         <div style={{ display: "flex", gap: 8 }}>
-          <Button
-            type="primary"
-            onClick={handleGenerate}
-            loading={loading}
-            disabled={!selectedMetal || !selectedLinker}
-          >
+          <Button type="primary" onClick={handleGenerate} loading={loading} disabled={!selectedMetal || !selectedLinker}>
             Compute Structure
           </Button>
-          <Button onClick={handleReset}>Reset Filters</Button>
+          <Button onClick={handleReset}>Reset</Button>
         </div>
       </Form>
     </div>

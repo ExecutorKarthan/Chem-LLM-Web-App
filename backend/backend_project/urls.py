@@ -17,18 +17,19 @@ urlpatterns = [
 # ── API endpoints ──────────────────────────────────────────────────────
     path("api/check-cookie/", api_views.check_cookie),
     path("api/tokenize-key/", api_views.tokenize_key),
-    path("api/list-models/", api_views.list_models),
     path("api/test-key/", api_views.test_api_key),
     path("api/csrf/", api_views.get_csrf_token),
+    path("api/clear-token/", api_views.clear_token),
+
+    # LLM Interaction
+    path("api/list-models/", api_views.list_models),
     path("api/ask/", api_views.ask_gemini),
     path("api/prime/", api_views.prime_gemini),
     path("api/ask-with-data/", api_views.ask_gemini_with_data),
-    path("api/clear-token/", api_views.clear_token),
     
-    # Add these two lines right here:
+    # MOF engine
     path("api/mof-meta/", api_views.get_mof_meta),
-    path("api/mof-filter/", api_views.filter_mofs),
-
+    path("api/mof-filter/", api_views.filter_mofs_dropdown),
     path("api/mof-generate/", api_views.generate_mof_code),
     path("api/mof-engine/<str:filename>", api_views.get_mof_engine_file),
 
