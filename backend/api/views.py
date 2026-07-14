@@ -867,6 +867,9 @@ def generate_mof_code(request):
     target_lcd = metrics["lcd"]
     target_pld = metrics["pld"]
 
+    # No print() calls here — Skulpt's stdout console stays clean.
+    # draw_lattice's real signature is (metal, linker_smiles, guest_ion, simple_mode);
+    # LCD/PLD are looked up client-side by MOFRenderer itself, not passed in.
     python_script = f"""
 import mof_renderer
 
@@ -875,63 +878,43 @@ linker_smiles = "{linker}"
 guest_ion = "{guest_ion if guest_ion else 'None'}"
 simple_mode = {simple_mode}
 
-lcd_size = {target_lcd}
-pld_size = {target_pld}
-
-print("Initializing lattice visualization map...")
-print(f" -> Active Node Center: {{metal_ion}}")
-print(f" -> Structural Constraint Metrics - LCD: {{lcd_size}} Å, PLD: {{pld_size}} Å")
-
 mof_renderer.draw_lattice(metal_ion, linker_smiles, guest_ion, simple_mode)
 """
 
-    readout = [
-        {"text": f"Located mono-metal/mono-linker MOF for [{metal}] center.", "color": "green"},
-        {"text": f"Extracted metrics -> LCD: {target_lcd} Å | PLD: {target_pld} Å.", "color": "blue"},
-    ]
-    if guest_ion:
-        readout.append({"text": f"Simulating active transport path entry for guest ion: {guest_ion}.", "color": "orange"})
+    readout = _build_pore_readout(target_lcd, target_pld, guest_ion)
 
     return Response({"code": python_script.strip(), "readout": readout}, status=status.HTTP_200_OK)
 
-def _compute_pore_readout(lcd, pld, guest_ion):
+
+def _build_pore_readout(lcd, pld, guest_ion):
     """
-    Same verdict math as MOFRenderer.get_readout_lines() in
-    mof_renderer.py, computed server-side so it can be returned as
-    structured JSON and rendered as a real HTML info panel next to the
-    Skulpt canvas instead of illegible turtle-drawn text on the diagram.
-    Returns a list of {"text": str, "color": str} dicts, or [] if no
-    guest ion was selected.
+    Builds the readout panel content: static LCD/PLD definitions, the
+    extracted metrics with their radii, and (if a guest ion is selected)
+    that ion's bare and hydrated radii for a quick pore-fit comparison.
     """
-    if not guest_ion:
-        return []
-
-    try:
-        lcd_val = float(lcd)
-        pld_val = float(pld)
-    except (ValueError, TypeError):
-        return [{"text": "Error: Invalid LCD/PLD metrics supplied.", "color": "#F85149"}]
-
-    entry = ION_RADII.get(guest_ion)
-    pore_fit_ang = pld_val / 2
-
-    if not entry:
-        return [{"text": f"Ion '{guest_ion}' not in database", "color": "#8B949E"}]
-
-    ionic_ang, hydrated_ang, verified = entry
+    lcd_radius = lcd / 2
+    pld_radius = pld / 2
 
     lines = [
-        (f"Largest Cavity Diameter (LCD): {lcd_val:.2f} \u00c5  \u2192  cavity radius {lcd_val/2:.2f} \u00c5", "#D81B60"),
-        (f"Pore Limiting Diameter (PLD): {pld_val:.2f} \u00c5  \u2192  bottleneck radius {pore_fit_ang:.2f} \u00c5", "#994F00"),
-        (f"Guest ion radius (bare): {ionic_ang:.2f} \u00c5", "#4B0092"),
+        {"text": "Pore fit readout", "color": "#FFFFFF"},
+        {"text": "LCD = Largest Cavity Diameter, the biggest sphere that fits inside the pore.", "color": "#8B949E"},
+        {"text": "PLD = Pore Limiting Diameter, the narrowest bottleneck a guest ion must pass through.", "color": "#8B949E"},
+        {"text": f"Extracted metrics -> LCD: {lcd:.5f} \u00c5 | PLD: {pld:.5f} \u00c5.", "color": "blue"},
+        {"text": f"Cavity radius (LCD / 2): {lcd_radius:.2f} \u00c5", "color": "#D81B60"},
+        {"text": f"Bottleneck radius (PLD / 2): {pld_radius:.2f} \u00c5", "color": "#994F00"},
     ]
-    if hydrated_ang is not None:
-        lines.append((f"Guest ion radius (hydrated): {hydrated_ang:.2f} \u00c5", "#56B4E9"))
 
-    src_note = "Exp. verified" if "Experimental" in verified else "Est./unverified"
-    lines.append((f"* {src_note} ion radii; pore from MOF_data.csv", "#6E7681"))
+    if guest_ion:
+        entry = ION_RADII.get(guest_ion)
+        if entry:
+            ionic_ang, hydrated_ang, _verified = entry
+            lines.append({"text": f"Guest ion ionic radius: {ionic_ang:.2f} \u00c5", "color": "#4B0092"})
+            if hydrated_ang is not None:
+                lines.append({"text": f"Guest ion hydrated radius: {hydrated_ang:.2f} \u00c5", "color": "#56B4E9"})
+        else:
+            lines.append({"text": f"Ion '{guest_ion}' not in radii database", "color": "#8B949E"})
 
-    return [{"text": text, "color": color} for text, color in lines]
+    return lines
 
 @api_view(["GET"])
 def get_mof_engine_file(request, filename):
