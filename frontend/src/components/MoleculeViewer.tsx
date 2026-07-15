@@ -9,7 +9,8 @@ import initRDKitModule from "@rdkit/rdkit";
 interface MoleculeViewerProps {
   smiles: string[];
   substructure: string;
-  linkerName?: string; // ADDED: Prop for the common name
+  linkerName?: string;    // Kept for backward compatibility with MOF Explorer
+  linkerNames?: string[]; // ADDED: Prop for the common names array
 }
 
 // ─── RDKit singleton ──────────────────────────────────────────────────────────
@@ -201,7 +202,7 @@ const MoleculePanel: React.FC<MoleculePanelProps> = ({ smiles, label, substructu
 };
 
 // ─── Main viewer ──────────────────────────────────────────────────────────────
-const MoleculeViewer: React.FC<MoleculeViewerProps> = ({ smiles, substructure, linkerName }) => {
+const MoleculeViewer: React.FC<MoleculeViewerProps> = ({ smiles, substructure, linkerName, linkerNames }) => {
   if (!smiles || smiles.length === 0) {
     return (
       <div style={{ width: "100%" }}>
@@ -217,7 +218,7 @@ const MoleculeViewer: React.FC<MoleculeViewerProps> = ({ smiles, substructure, l
     <div style={{ width: "100%" }}>
       <h3 style={{ margin: "0 0 12px 0" }}>Molecule Viewer</h3>
       
-      {/* ADDED: Common name display */}
+      {/* Show single linker name if provided (MOF Explorer mode) */}
       {linkerName && (
         <div style={{ 
           textAlign: "center", 
@@ -237,14 +238,15 @@ const MoleculeViewer: React.FC<MoleculeViewerProps> = ({ smiles, substructure, l
           gap: 12,
         }}
       >
-        {smiles.map((s, i) => (
-          <MoleculePanel
-            key={`${i}-${s}`}
-            smiles={s}
-            label={`Molecule ${i + 1}`}
-            substructure={substructure}
-          />
-        ))}
+      {smiles.map((s, i) => (
+        <MoleculePanel
+          key={`${i}-${s}`}
+          smiles={s}
+          // Prioritize linkerNames array, fallback to single linkerName, then default label
+          label={linkerNames?.[i] || linkerName || `Molecule ${i + 1}`} 
+          substructure={substructure}
+        />
+      ))}
       </div>
     </div>
   );

@@ -40,7 +40,9 @@ const ChemApp = () => {
   const [showSkulptCanvas, setShowSkulptCanvas] = useState<boolean>(false);
   const [activeDropdownLinker, setActiveDropdownLinker] = useState<string>("");
 
+  // States for labels: one for single MOF, one for array-based SMILES
   const [linkerCommonName, setLinkerCommonName] = useState<string>("");
+  const [linkerCommonNames, setLinkerCommonNames] = useState<string[]>([]);
 
   const beginRequest = () => {
     setLoading(true);
@@ -119,10 +121,33 @@ const ChemApp = () => {
     }
   };
 
-  // Receives both the molecule list and the substructure query from SmilesInput
-  const handleSubmitSmiles = (smilesList: string[], substructure: string) => {
+  // Receives the molecule list and the substructure query from SmilesInput
+  const handleSubmitSmiles = async (smilesList: string[], substructure: string) => {
     setSubmittedSmiles(smilesList);
     setSubmittedSubstructure(substructure);
+
+    // Initialize array with default labels
+    const names = new Array(smilesList.length).fill("");
+    setLinkerCommonNames(names);
+
+    // Resolve common names via PubChem
+    smilesList.forEach(async (smiles, index) => {
+      try {
+        const encoded = encodeURIComponent(smiles);
+        const cidRes = await axios.get(`https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/smiles/${encoded}/cids/JSON`);
+        const cid = cidRes.data.IdentifierList.CID[0];
+        const synRes = await axios.get(`https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/${cid}/synonyms/JSON`);
+        const name = synRes.data.InformationList.Information[0].Synonym[0];
+
+        setLinkerCommonNames(prev => {
+          const next = [...prev];
+          next[index] = name;
+          return next;
+        });
+      } catch (e) {
+        console.warn(`Could not resolve name for molecule ${index + 1}`);
+      }
+    });
   };
 
   const colStyle = (extra?: React.CSSProperties): React.CSSProperties => ({
@@ -175,9 +200,11 @@ const ChemApp = () => {
             onChange={(checked) => {
               setLinkerViewerMode(checked);
               setMofCode("");
-              setMofReadout(null);   // ← was []
+              setMofReadout(null);
               setShowSkulptCanvas(false);
               setActiveDropdownLinker("");
+              setLinkerCommonName("");
+              setLinkerCommonNames([]);
             }}
           />
           <span style={{ fontSize: 13, color: linkerViewerMode ? "#333" : "#aaa", fontWeight: 500 }}>
@@ -208,23 +235,21 @@ const ChemApp = () => {
         <Col xs={24} md={12} style={colStyle({ overflowY: "auto" })}>
           {linkerViewerMode ? (
             <MoleculeViewer
-              smiles={activeDropdownLinker ? [activeDropdownLinker] : []}
-              substructure=""
-              linkerName={linkerCommonName}
+              smiles={submittedSmiles}
+              substructure={submittedSubstructure}
+              linkerNames={linkerCommonNames}
             />
           ) : (
-            /* MOF Explorer View Render Decision Split */
             showSkulptCanvas ? (
               <div id="skulpt-canvas-container" style={{ width: "100%" }}>
                 <SkulptDisplay code={mofCode} />
                 <MofReadoutPanel readout={mofReadout} />
               </div>
             ) : (
-              /* If compute hasn't run yet, load MoleculeViewer with the currently selected dropdown linker */
               <MoleculeViewer
                 smiles={activeDropdownLinker ? [activeDropdownLinker] : []}
                 substructure=""
-                linkerName={linkerCommonName} // <--- Added this prop
+                linkerName={linkerCommonName}
               />
             )
           )}
