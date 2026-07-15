@@ -9,27 +9,31 @@ MOF_DATA_CSV_PATH = CURRENT_DIR / "MOF_data.csv"
 # Global dictionaries
 METAL_TO_LINKERS = {}
 LINKER_TO_METALS = {}
+LINKER_TO_NAME = {}
 
 def load_registries():
-    global METAL_TO_LINKERS, LINKER_TO_METALS
+    global METAL_TO_LINKERS, LINKER_TO_METALS, LINKER_TO_NAME
     
     # 1. Process registry_by_metals.csv
-    # This allows: Given a metal, what are the possible linkers?
     with open(REGISTRY_METALS_PATH, encoding="utf-8-sig") as f:
         reader = csv.DictReader(f)
         for row in reader:
             metal = row["metal"].strip()
-            # Assuming 'compatible_linkers' is a comma-separated list
             linkers = [l.strip() for l in row["compatible_linkers"].split(",")]
             METAL_TO_LINKERS[metal] = set(linkers)
 
     # 2. Process registry_by_linkers.csv
-    # This allows: Given a linker, what are the possible metals?
     with open(REGISTRY_LINKERS_PATH, encoding="utf-8-sig") as f:
         reader = csv.DictReader(f)
         for row in reader:
             linker = row["linker_smiles"].strip()
-            # Assuming 'compatible_metals' is a comma-separated list
+            name = row.get("common_name", "").strip() # Extract common name
+            
+            # Map linker to name
+            if name:
+                LINKER_TO_NAME[linker] = name
+                
+            # Map metals
             metals = [m.strip() for m in row["compatible_metals"].split(",")]
             LINKER_TO_METALS[linker] = set(metals)
 

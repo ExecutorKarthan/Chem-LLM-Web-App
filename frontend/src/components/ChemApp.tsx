@@ -40,6 +40,8 @@ const ChemApp = () => {
   const [showSkulptCanvas, setShowSkulptCanvas] = useState<boolean>(false);
   const [activeDropdownLinker, setActiveDropdownLinker] = useState<string>("");
 
+  const [linkerCommonName, setLinkerCommonName] = useState<string>("");
+
   const beginRequest = () => {
     setLoading(true);
     setResponse("");
@@ -198,15 +200,17 @@ const ChemApp = () => {
               onCodeReady={setMofCode} 
               onReadout={setMofReadout} 
               setShowSkulpt={setShowSkulptCanvas}
-              onLinkerSelect={setActiveDropdownLinker} // Pipes chosen select box option into parent layout state
+              onLinkerSelect={setActiveDropdownLinker} 
+              onLinkerNameUpdate={setLinkerCommonName}
             />
           )}
         </Col>
         <Col xs={24} md={12} style={colStyle({ overflowY: "auto" })}>
           {linkerViewerMode ? (
             <MoleculeViewer
-              smiles={submittedSmiles}
-              substructure={submittedSubstructure}
+              smiles={activeDropdownLinker ? [activeDropdownLinker] : []}
+              substructure=""
+              linkerName={linkerCommonName}
             />
           ) : (
             /* MOF Explorer View Render Decision Split */
@@ -220,6 +224,7 @@ const ChemApp = () => {
               <MoleculeViewer
                 smiles={activeDropdownLinker ? [activeDropdownLinker] : []}
                 substructure=""
+                linkerName={linkerCommonName} // <--- Added this prop
               />
             )
           )}

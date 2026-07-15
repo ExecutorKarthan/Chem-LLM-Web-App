@@ -788,16 +788,26 @@ def filter_mofs_dropdown(request):
         options = list(mof_index.METAL_TO_LINKERS.get(selected_metal, []))
         return JsonResponse({"results": [{"type": "linker", "value": val} for val in options]})
 
-    # CASE 2: User picks a linker -> Return only compatible metals
+    # CASE 2: User picks a linker -> Return compatible metals AND the common name
     if selected_linker and not selected_metal:
         options = list(mof_index.LINKER_TO_METALS.get(selected_linker, []))
-        return JsonResponse({"results": [{"type": "metal", "value": val} for val in options]})
+        # Retrieve the common name if available
+        common_name = mof_index.LINKER_TO_NAME.get(selected_linker, "")
+        
+        return JsonResponse({
+            "results": [{"type": "metal", "value": val} for val in options],
+            "common_name": common_name
+        })
 
-    # CASE 3: Both selected -> Check if the combination exists in the registries
+    # CASE 3: Both selected -> Check validity AND provide common name for display
     if selected_metal and selected_linker:
         valid_linkers = mof_index.METAL_TO_LINKERS.get(selected_metal, set())
         if selected_linker in valid_linkers:
-            return JsonResponse({"results": [{"status": "valid"}]})
+            common_name = mof_index.LINKER_TO_NAME.get(selected_linker, "")
+            return JsonResponse({
+                "results": [{"status": "valid"}],
+                "common_name": common_name
+            })
         return JsonResponse({"results": [{"status": "invalid"}]}, status=404)
 
     return JsonResponse({"error": "Invalid request"}, status=400)

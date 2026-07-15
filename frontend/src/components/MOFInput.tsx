@@ -14,6 +14,7 @@ interface MOFInputProps {
   onReadout?: (readout: PoreReadout | null) => void;
   setShowSkulpt: (show: boolean) => void;
   onLinkerSelect?: (smiles: string) => void;
+  onLinkerNameUpdate: (name: string) => void; // Add this
 }
 
 interface MofResult {
@@ -24,7 +25,12 @@ interface MofResult {
   pld: number;
 }
 
-export const MOFInput: React.FC<MOFInputProps> = ({ onCodeReady, onReadout, setShowSkulpt, onLinkerSelect }) => {
+interface MOFInputProps {
+  // ... existing props
+  onLinkerNameUpdate: (name: string) => void; 
+}
+
+export const MOFInput: React.FC<MOFInputProps> = ({ onCodeReady, onReadout, setShowSkulpt, onLinkerSelect, onLinkerNameUpdate}) => {
   const [guestIons, setGuestIons] = useState<string[]>([]);
   const [allMetals, setAllMetals] = useState<MetaOption[]>([]);
   const [allLinkers, setAllLinkers] = useState<MetaOption[]>([]);
@@ -41,6 +47,8 @@ export const MOFInput: React.FC<MOFInputProps> = ({ onCodeReady, onReadout, setS
 
   const [filteredLinkers, setFilteredLinkers] = useState<MetaOption[]>([]);
   const [filteredMetals, setFilteredMetals] = useState<MetaOption[]>([]);
+
+  const [activeLinkerName, setActiveLinkerName] = useState<string>("");
 
   useEffect(() => {
     axios.get(`${BACKEND_URL}/api/mof-meta/`)
@@ -61,41 +69,27 @@ export const MOFInput: React.FC<MOFInputProps> = ({ onCodeReady, onReadout, setS
   }, []);
 
   useEffect(() => {
-  if (!selectedMetal && !selectedLinker) return;
+    if (!selectedMetal && !selectedLinker) return;
 
-  const params = searchMode === "metalFirst" 
-    ? { metal: selectedMetal } 
-    : { linker: selectedLinker };
+    const params = searchMode === "metalFirst" ? { metal: selectedMetal } : { linker: selectedLinker };
 
-  axios.get(`${BACKEND_URL}/api/mof-filter/`, { params })
-    .then((res) => {
-      const results = res.data.results; // [{type: "linker"|"metal", value: "..."}]
+    axios.get(`${BACKEND_URL}/api/mof-filter/`, { params })
+      .then((res) => {
+        const results = res.data.results;
+        const commonName = res.data.common_name || "";
+        
+        // Pass the name to the parent
+        onLinkerNameUpdate(commonName);
 
-      if (searchMode === "metalFirst" && selectedMetal) {
-        // Filter options based on returned valid linkers
-        const validLinkerValues = results.map((r: any) => r.value);
-        setFilteredLinkers(allLinkers.filter(l => validLinkerValues.includes(l.value)));
-
-        // Reset if current selection is invalid
-        if (selectedLinker && !validLinkerValues.includes(selectedLinker)) {
-          setSelectedLinker(undefined);
-          if (onLinkerSelect) onLinkerSelect("");
+        if (searchMode === "metalFirst" && selectedMetal) {
+          const validLinkerValues = results.map((r: any) => r.value);
+          setFilteredLinkers(allLinkers.filter(l => validLinkerValues.includes(l.value)));
+        } else if (searchMode === "linkerFirst" && selectedLinker) {
+          const validMetalValues = results.map((r: any) => r.value);
+          setFilteredMetals(allMetals.filter(m => validMetalValues.includes(m.value)));
         }
-      } 
-      else if (searchMode === "linkerFirst" && selectedLinker) {
-        // Filter options based on returned valid metals
-        const validMetalValues = results.map((r: any) => r.value);
-        setFilteredMetals(allMetals.filter(m => validMetalValues.includes(m.value)));
-
-        // Reset if current selection is invalid
-        if (selectedMetal && !validMetalValues.includes(selectedMetal)) {
-          setSelectedMetal(undefined);
-        }
-      }
-    })
-    .catch(err => console.error("Filter API Error:", err));
-
-}, [selectedMetal, selectedLinker, searchMode, allMetals, allLinkers]);
+      });
+  }, [selectedMetal, selectedLinker, searchMode]);
 
   const handleReset = () => {
     setSelectedMetal(undefined);
@@ -103,6 +97,10 @@ export const MOFInput: React.FC<MOFInputProps> = ({ onCodeReady, onReadout, setS
     setFilteredLinkers(allLinkers);
     setFilteredMetals(allMetals);
     setShowSkulpt(false);
+    
+    // --- THIS IS THE MISSING PIECE ---
+    onLinkerNameUpdate(""); 
+    
     if (onLinkerSelect) onLinkerSelect("");
   };
 
