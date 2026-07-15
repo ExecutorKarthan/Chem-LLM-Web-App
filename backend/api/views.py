@@ -763,83 +763,45 @@ def get_mof_meta(request):
                     "label": display_name
                 })
 
-    guest_ions = ["Li+", "Na+", "K+", "Mg2+", "Ca2+"] # Or whatever archetypes you support
+    guest_ions = [
+        "Li+", "Na+", "K+", "Rb+", "Cs+", "Be2+", "Mg2+", "Ca2+", "Sr2+", "Ba2+",
+        "Cu+", "V2+", "Cr2+", "Mn2+", "Fe2+", "Co2+", "Ni2+", "Cu2+", "Zn2+", "Ti2+",
+        "Sn2+", "Pb2+", "Ti3+", "V3+", "Cr3+", "Mn3+", "Fe3+", "Co3+", "Ti4+", "V4+",
+        "Mn4+", "V5+", "Cr6+", "Mn7+", "Al3+", "Ga3+", "In3+", "Sn4+", "Pb4+", "Sc3+",
+        "Y3+", "La3+", "Ce3+", "Ce4+", "Nd3+", "Gd3+", "Lu3+", "U3+", "U4+", "U6+",
+        "Np3+", "Np4+", "Pu3+", "Pu4+", "Am3+", "Am4+", "Ac3+", "Th4+", "Pa4+", "Pa5+"
+    ]
     
     return Response({
         "metals": sorted(metals, key=lambda x: x["label"]),
         "linkers": sorted(linkers, key=lambda x: x["label"]),
-        "guestIons": guest_ions
+        "guest_ions": guest_ions
     })
 
 @api_view(["GET"])
 def filter_mofs_dropdown(request):
-    """
-    SECURE READ-ONLY FILTERING (GET)
-    Dynamically used by the UI dropdowns to show compatible metal/linker matches.
-    Natively safe from CSRF because it only reads data.
-    """
     selected_metal = request.query_params.get("metal")
     selected_linker = request.query_params.get("linker")
-    selected_ion = request.query_params.get("ion")
-    
-    try:
-        tolerance = float(request.query_params.get("tolerance", 0.0))
-    except (ValueError, TypeError):
-        tolerance = 0.0
 
-    try:
-        # Uses your existing internal helper function to parse/load the DB
-        mof_db = _get_parsed_mof_db()
-    except Exception:
-        mof_db = {}
+    # CASE 1: User picks a metal -> Return only compatible linkers
+    if selected_metal and not selected_linker:
+        options = list(mof_index.METAL_TO_LINKERS.get(selected_metal, []))
+        return JsonResponse({"results": [{"type": "linker", "value": val} for val in options]})
 
-    filtered = []
-    # Uses your existing ION_RADII dictionary mapping
-    ion_radius, ion_scaling, _ = ION_RADII.get(selected_ion, (None, None, None))
+    # CASE 2: User picks a linker -> Return only compatible metals
+    if selected_linker and not selected_metal:
+        options = list(mof_index.LINKER_TO_METALS.get(selected_linker, []))
+        return JsonResponse({"results": [{"type": "metal", "value": val} for val in options]})
 
-    for identifier, (lcd, pld, metal_str) in mof_db.items():
-        # Uses your existing internal helper to extract the main linker segment
-        row_linker = _extract_organic_linker(identifier)
+    # CASE 3: Both selected -> Check if the combination exists in the registries
+    if selected_metal and selected_linker:
+        valid_linkers = mof_index.METAL_TO_LINKERS.get(selected_metal, set())
+        if selected_linker in valid_linkers:
+            return JsonResponse({"results": [{"status": "valid"}]})
+        return JsonResponse({"results": [{"status": "invalid"}]}, status=404)
 
-        if selected_linker and selected_linker != row_linker:
-            continue
-            
-        if selected_metal:
-            # Robust split matching elements using a regex pattern
-            row_metals = [x.strip() for x in re.split(r'[\.,\-_]', str(metal_str))] if metal_str else []
-            if selected_metal not in row_metals:
-                continue
-
-        # Physical ion transport path entry verification logic
-        is_viable = False
-        scaled_size = None
-        if ion_radius is not None and ion_scaling is not None:
-            scaled_size = ion_radius * ion_scaling
-            if pld >= (scaled_size - tolerance):
-                is_viable = True
-        else:
-            is_viable = True
-
-        # Break down composite structure formulas into individual sub-linkers
-        # so they accurately map back to individual dropdown choices
-        individual_linkers = identifier.split('.')
-        for linker_frag in individual_linkers:
-            clean_frag = linker_frag.strip()
-            # Ignore fragment blocks that represent the bracketed metal node elements
-            if clean_frag and not re.match(r'^\[[A-Za-z]{1,2}\]$', clean_frag):
-                filtered.append({
-                    "identifier": clean_frag,  # Matches values generated in get_mof_meta
-                    "mof_id": identifier,      # Keeps the raw, combined row string available
-                    "linker": clean_frag,      
-                    "metals": metal_str,
-                    "lcd": lcd,
-                    "pld": pld,
-                    "scaled_size": round(scaled_size, 3) if scaled_size else None,
-                    "is_viable": is_viable
-                })
-
-    return JsonResponse({"results": filtered}, status=status.HTTP_200_OK)
-
+    return JsonResponse({"error": "Invalid request"}, status=400)
+        
 @api_view(["POST"])
 def generate_mof_code(request):
     metal = request.data.get("metal")
@@ -888,33 +850,32 @@ mof_renderer.draw_lattice(metal_ion, linker_smiles, guest_ion, simple_mode)
 
 def _build_pore_readout(lcd, pld, guest_ion):
     """
-    Builds the readout panel content: static LCD/PLD definitions, the
-    extracted metrics with their radii, and (if a guest ion is selected)
-    that ion's bare and hydrated radii for a quick pore-fit comparison.
+    Plain-data pore readout payload. No labels, definitions, or formatting
+    here — MofReadoutPanel.tsx owns all presentation. This only computes
+    the numeric values the panel needs.
     """
-    lcd_radius = lcd / 2
-    pld_radius = pld / 2
-
-    lines = [
-        {"text": "Pore fit readout", "color": "#FFFFFF"},
-        {"text": "LCD = Largest Cavity Diameter, the biggest sphere that fits inside the pore.", "color": "#8B949E"},
-        {"text": "PLD = Pore Limiting Diameter, the narrowest bottleneck a guest ion must pass through.", "color": "#8B949E"},
-        {"text": f"Extracted metrics -> LCD: {lcd:.5f} \u00c5 | PLD: {pld:.5f} \u00c5.", "color": "blue"},
-        {"text": f"Cavity radius (LCD / 2): {lcd_radius:.2f} \u00c5", "color": "#D81B60"},
-        {"text": f"Bottleneck radius (PLD / 2): {pld_radius:.2f} \u00c5", "color": "#994F00"},
-    ]
+    readout = {
+        "lcd": lcd,
+        "pld": pld,
+        "lcd_radius": lcd / 2,
+        "pld_radius": pld / 2,
+        "guest_ion": guest_ion or None,
+        "guest_ion_known": None,       # True / False / None (no ion selected)
+        "guest_ionic_radius": None,
+        "guest_hydrated_radius": None,
+    }
 
     if guest_ion:
         entry = ION_RADII.get(guest_ion)
         if entry:
             ionic_ang, hydrated_ang, _verified = entry
-            lines.append({"text": f"Guest ion ionic radius: {ionic_ang:.2f} \u00c5", "color": "#4B0092"})
-            if hydrated_ang is not None:
-                lines.append({"text": f"Guest ion hydrated radius: {hydrated_ang:.2f} \u00c5", "color": "#56B4E9"})
+            readout["guest_ion_known"] = True
+            readout["guest_ionic_radius"] = ionic_ang
+            readout["guest_hydrated_radius"] = hydrated_ang
         else:
-            lines.append({"text": f"Ion '{guest_ion}' not in radii database", "color": "#8B949E"})
+            readout["guest_ion_known"] = False
 
-    return lines
+    return readout
 
 @api_view(["GET"])
 def get_mof_engine_file(request, filename):

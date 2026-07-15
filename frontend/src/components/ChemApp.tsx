@@ -8,7 +8,7 @@ import { BACKEND_URL } from "../config.js";
 import SmilesInput from "./SMILESInput.js";
 import MoleculeViewer from "./MoleculeViewer.js";
 import MOFInput from "./MOFInput.js";
-import type { ReadoutLine } from "./MOFInput.js";
+import type { PoreReadout } from "./MOFInput.js";
 import MofReadoutPanel from "./MofReadoutPanel.js";
 import SkulptDisplay from "./SkulptDisplay.js";
 
@@ -34,7 +34,7 @@ const ChemApp = () => {
   const [submittedSubstructure, setSubmittedSubstructure] = useState<string>("");
   const [linkerViewerMode, setLinkerViewerMode] = useState<boolean>(false);
   const [mofCode, setMofCode] = useState<string>("");
-  const [mofReadout, setMofReadout] = useState<ReadoutLine[]>([]);
+  const [mofReadout, setMofReadout] = useState<PoreReadout | null >(null);
 
   // --- CONTROL HOOK STATES ---
   const [showSkulptCanvas, setShowSkulptCanvas] = useState<boolean>(false);
@@ -173,10 +173,10 @@ const ChemApp = () => {
             onChange={(checked) => {
               setLinkerViewerMode(checked);
               setMofCode("");
-              setMofReadout([]);
-              setShowSkulptCanvas(false); 
+              setMofReadout(null);   // ← was []
+              setShowSkulptCanvas(false);
               setActiveDropdownLinker("");
-            }} 
+            }}
           />
           <span style={{ fontSize: 13, color: linkerViewerMode ? "#333" : "#aaa", fontWeight: 500 }}>
             Linker Viewer
@@ -213,7 +213,7 @@ const ChemApp = () => {
             showSkulptCanvas ? (
               <div id="skulpt-canvas-container" style={{ width: "100%" }}>
                 <SkulptDisplay code={mofCode} />
-                <MofReadoutPanel lines={mofReadout} />
+                <MofReadoutPanel readout={mofReadout} />
               </div>
             ) : (
               /* If compute hasn't run yet, load MoleculeViewer with the currently selected dropdown linker */

@@ -6,6 +6,35 @@ REGISTRY_LINKERS_PATH = CURRENT_DIR / "registry_by_linkers.csv"
 REGISTRY_METALS_PATH = CURRENT_DIR / "registry_by_metals.csv"
 MOF_DATA_CSV_PATH = CURRENT_DIR / "MOF_data.csv"
 
+# Global dictionaries
+METAL_TO_LINKERS = {}
+LINKER_TO_METALS = {}
+
+def load_registries():
+    global METAL_TO_LINKERS, LINKER_TO_METALS
+    
+    # 1. Process registry_by_metals.csv
+    # This allows: Given a metal, what are the possible linkers?
+    with open(REGISTRY_METALS_PATH, encoding="utf-8-sig") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            metal = row["metal"].strip()
+            # Assuming 'compatible_linkers' is a comma-separated list
+            linkers = [l.strip() for l in row["compatible_linkers"].split(",")]
+            METAL_TO_LINKERS[metal] = set(linkers)
+
+    # 2. Process registry_by_linkers.csv
+    # This allows: Given a linker, what are the possible metals?
+    with open(REGISTRY_LINKERS_PATH, encoding="utf-8-sig") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            linker = row["linker_smiles"].strip()
+            # Assuming 'compatible_metals' is a comma-separated list
+            metals = [m.strip() for m in row["compatible_metals"].split(",")]
+            LINKER_TO_METALS[linker] = set(metals)
+
+# Call this once at startup
+load_registries()
 
 def _load_id_registry(path, key_column, ids_column):
     """Loads a registry CSV into {key: set(mof_ids)}."""
