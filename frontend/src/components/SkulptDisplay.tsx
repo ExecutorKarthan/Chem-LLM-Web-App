@@ -199,9 +199,7 @@ const builtinRead = (filename: string): string => {
       const height = canvasRef.current?.clientHeight ?? 500;
 
       window.Sk.configure({
-        output: (text: string) => {
-          console.log("Python Output:", text);
-        },
+        output: outf,
         read: builtinRead,
       });
 
@@ -224,36 +222,16 @@ const builtinRead = (filename: string): string => {
         .asyncToPromise(() =>
           window.Sk.importMainWithBody("<stdin>", false, code, true)
         )
-        .then(
-          () => {
-            setRunning(false);
-          },
-          (err: any) => {
-            setRunning(false);
-            
-            // 1. Expose the raw error to the window so you can read it via the browser console
-            window.lastSkulptError = err;
-
-            // 2. Safely extract the comprehensive Python traceback string
-            let errorMessage = "Unknown error";
-            if (err && typeof err.toString === "function") {
-              errorMessage = err.toString();
-            } else if (typeof err === "string") {
-              errorMessage = err;
-            }
-
-            console.error("Python Execution Crash Details:", errorMessage);
-
-            // 3. Print the raw Python exception message clearly on your screen
-            setOutputText(
-              (prev) =>
-                prev +
-                "<br><strong style='color:red'>Python Runtime Error:</strong><br><pre style='color:#cc0000; background:#fff0f0; padding:8px; border:1px solid #ffcccc; margin-top:4px;'>" +
-                errorMessage +
-                "</pre>"
-            );
-          }
-        );
+        .then(() => {
+          console.log("Success");
+          })
+        .catch((err: any) => {
+           // This logs the full internal Skulpt error to your Browser Developer Tools
+          console.error("SKULPT FATAL ERROR:", err);
+          console.error("DEBUG - Last few lines of code executed:", code.split('\n').slice(-10));
+          // Alert the user with the specific error type
+          alert(`Python Error: ${err.toString()}`);
+        });
     }, 100);
   };
 

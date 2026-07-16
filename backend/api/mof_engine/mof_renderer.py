@@ -30,73 +30,6 @@ from turtle_renderer import (
 # MOF_DB is imported further down, right where it's used/documented.
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ION RADII TABLE
-# Format: symbol -> (ionic_radius_A, hydrated_radius_A, verification)
-# ─────────────────────────────────────────────────────────────────────────────
-ION_RADII = {
-    "Li+":  (0.76,  3.40, "Experimentally Verified"),
-    "Na+":  (1.02,  3.58, "Experimentally Verified"),
-    "K+":   (1.38,  3.31, "Experimentally Verified"),
-    "Rb+":  (1.52,  3.29, "Experimentally Verified"),
-    "Cs+":  (1.67,  3.29, "Experimentally Verified"),
-    "Be2+": (0.45,  4.59, "Estimated / Unverified"),
-    "Mg2+": (0.72,  4.28, "Experimentally Verified"),
-    "Ca2+": (1.00,  4.12, "Experimentally Verified"),
-    "Sr2+": (1.18,  4.12, "Experimentally Verified"),
-    "Ba2+": (1.35,  4.04, "Experimentally Verified"),
-    "Cu+":  (0.77,  3.20, "Estimated / Unverified"),
-    "V2+":  (0.79,  4.30, "Estimated / Unverified"),
-    "Cr2+": (0.73,  4.25, "Estimated / Unverified"),
-    "Mn2+": (0.67,  4.38, "Experimentally Verified"),
-    "Fe2+": (0.61,  4.28, "Experimentally Verified"),
-    "Co2+": (0.65,  4.23, "Experimentally Verified"),
-    "Ni2+": (0.69,  4.04, "Experimentally Verified"),
-    "Cu2+": (0.73,  4.19, "Experimentally Verified"),
-    "Zn2+": (0.74,  4.30, "Experimentally Verified"),
-    "Ti2+": (0.86,  4.35, "Estimated / Unverified"),
-    "Sn2+": (1.12,  3.95, "Estimated / Unverified"),
-    "Pb2+": (1.19,  4.01, "Estimated / Unverified"),
-    "Ti3+": (0.67,  4.65, "Estimated / Unverified"),
-    "V3+":  (0.64,  4.60, "Estimated / Unverified"),
-    "Cr3+": (0.62,  4.61, "Estimated / Unverified"),
-    "Mn3+": (0.58,  4.60, "Estimated / Unverified"),
-    "Fe3+": (0.55,  4.57, "Experimentally Verified"),
-    "Co3+": (0.55,  4.55, "Estimated / Unverified"),
-    "Ti4+": (0.61,  4.70, "Estimated / Unverified"),
-    "V4+":  (0.58,  4.70, "Estimated / Unverified"),
-    "Mn4+": (0.53,  4.75, "Estimated / Unverified"),
-    "V5+":  (0.54,  4.80, "Estimated / Unverified"),
-    "Cr6+": (0.44,  4.90, "Estimated / Unverified"),
-    "Mn7+": (0.46,  4.90, "Estimated / Unverified"),
-    "Al3+": (0.54,  4.75, "Experimentally Verified"),
-    "Ga3+": (0.62,  4.65, "Estimated / Unverified"),
-    "In3+": (0.80,  4.63, "Estimated / Unverified"),
-    "Sn4+": (0.69,  4.65, "Estimated / Unverified"),
-    "Pb4+": (0.78,  4.60, "Estimated / Unverified"),
-    "Sc3+": (0.75,  4.50, "Experimentally Verified"),
-    "Y3+":  (0.90,  4.40, "Experimentally Verified"),
-    "La3+": (1.03,  4.52, "Experimentally Verified"),
-    "Ce3+": (1.01,  4.51, "Estimated / Unverified"),
-    "Ce4+": (0.87,  4.65, "Estimated / Unverified"),
-    "Nd3+": (0.98,  4.48, "Estimated / Unverified"),
-    "Gd3+": (0.94,  4.45, "Estimated / Unverified"),
-    "Lu3+": (0.86,  4.39, "Estimated / Unverified"),
-    "U3+":  (1.03,  4.73, "Estimated / Unverified"),
-    "U4+":  (0.89,  4.83, "Estimated / Unverified"),
-    "U6+":  (0.73,  4.85, "Estimated / Unverified"),
-    "Np3+": (1.01,  4.72, "Estimated / Unverified"),
-    "Np4+": (0.87,  4.84, "Estimated / Unverified"),
-    "Pu3+": (1.00,  4.71, "Estimated / Unverified"),
-    "Pu4+": (0.86,  4.82, "Estimated / Unverified"),
-    "Am3+": (0.98,  4.70, "Estimated / Unverified"),
-    "Am4+": (0.85,  4.80, "Estimated / Unverified"),
-    "Ac3+": (1.12,  4.75, "Estimated / Unverified"),
-    "Th4+": (0.94,  4.87, "Estimated / Unverified"),
-    "Pa4+": (0.90,  4.85, "Estimated / Unverified"),
-    "Pa5+": (0.78,  4.90, "Estimated / Unverified"),
-}
-
-# ─────────────────────────────────────────────────────────────────────────────
 # TUNING CONSTANTS  — adjust these to change the look
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -270,7 +203,7 @@ class MOFRenderer:
         if guest_ion:
             self._guest_ionic_ang = guest_ion_metadata[0]
             self._guest_hydrated_ang = guest_ion_metadata[1]
-            self._guest_verified = entry = guest_ion_metadata[2]
+            self._guest_verified = guest_ion_metadata[2]
 
     def _center_linker(self):
         atoms = self.linker_mol.atoms

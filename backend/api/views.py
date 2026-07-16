@@ -779,7 +779,7 @@ import mof_renderer
 metal_ion = "{metal}"
 linker_smiles = "{linker}"
 guest_ion = "{guest_ion if guest_ion else 'None'}"
-guest_ion_metadata = "{guest_ion_metadata if guest_ion_metadata else 'None'}"
+guest_ion_metadata = {guest_ion_metadata if guest_ion_metadata else 'None'}
 simple_mode = {simple_mode}
 mof_id = "{mof_id}"  
 
@@ -792,6 +792,11 @@ mof_renderer.draw_lattice(
     simple_mode=simple_mode
 )
 """
+    
+    print("--- GENERATED PYTHON CODE START ---")
+    print(python_script)
+    print("--- GENERATED PYTHON CODE END ---")
+
     readout = _build_pore_readout(metrics["lcd"], metrics["pld"], guest_ion)
 
     return Response({"code": python_script.strip(), "readout": readout}, status=status.HTTP_200_OK)
