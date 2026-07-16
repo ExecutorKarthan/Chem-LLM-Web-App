@@ -199,7 +199,9 @@ def _lookup_mof(linker_smiles, metal):
 class MOFRenderer:
 
     def __init__(self, turtle_obj, metal, linker_smiles,
-                 cx=0, cy=0, scale=1.0, metal_charge=0, guest_ion=None):
+             cx=0, cy=0, scale=1.0, metal_charge=0, guest_ion=None, guest_ion_metadata = None, mof_id=None):
+        self.t            = turtle_obj
+        self.metal        = metal
         self.t            = turtle_obj
         self.metal        = metal
         self.metal_charge = metal_charge
@@ -208,6 +210,15 @@ class MOFRenderer:
         self.cy           = cy
         self.scale        = scale
         self.guest_ion    = guest_ion
+
+        print(f"DEBUG: Renderer initialized. mof_id='{mof_id}'")
+
+        if mof_id and mof_id in MOF_DB:
+            print("DEBUG: Using EXACT registry lookup.")
+            self.data = MOF_DB[mof_id]
+        else:
+            print("DEBUG: Using FUZZY fallback lookup.")
+            self.data = self._fuzzy_lookup(metal, linker_smiles)
 
         # ── Step 1: parse and layout linker ──────────────────────────────
         render_smiles = _select_linker_fragment(linker_smiles)
@@ -238,12 +249,15 @@ class MOFRenderer:
         self._sq_size = self._linker_half_w * 2 + 2 * self.metal_r
 
         # ── Step 4: pore data ────────────────────────────────────────────
-        db_result = _lookup_mof(linker_smiles, metal)
-        if db_result:
-            self._lcd_ang, self._pld_ang = db_result
+        if mof_id and mof_id in MOF_DB:
+            self._lcd_ang, self._pld_ang, _ = MOF_DB[mof_id] 
         else:
-            self._lcd_ang = MOF_PORE_DIAMETER_FALLBACK
-            self._pld_ang = MOF_PORE_DIAMETER_FALLBACK * 0.75
+            db_result = _lookup_mof(linker_smiles, metal)
+            if db_result:
+                self._lcd_ang, self._pld_ang = db_result
+            else:
+                self._lcd_ang = MOF_PORE_DIAMETER_FALLBACK
+                self._pld_ang = MOF_PORE_DIAMETER_FALLBACK * 0.75
 
         self._pore_fit_ang = self._pld_ang / 2
         self._pore_r_ang   = self._lcd_ang / 2
@@ -254,9 +268,9 @@ class MOFRenderer:
         self._guest_hydrated_ang = None
         self._guest_verified     = None
         if guest_ion:
-            entry = ION_RADII.get(guest_ion)
-            if entry:
-                self._guest_ionic_ang, self._guest_hydrated_ang, self._guest_verified = entry
+            self._guest_ionic_ang = guest_ion_metadata[0]
+            self._guest_hydrated_ang = guest_ion_metadata[1]
+            self._guest_verified = entry = guest_ion_metadata[2]
 
     def _center_linker(self):
         atoms = self.linker_mol.atoms
@@ -724,7 +738,7 @@ class MOFRenderer:
 # SKULPT COMPATIBILITY LAYER / BRIDGE
 # ─────────────────────────────────────────────────────────────────────────────
 
-def draw_lattice(metal, linker_smiles, guest_ion=None, simple_mode=False):
+def draw_lattice(metal, linker_smiles, mof_id=None, guest_ion=None, guest_ion_metadata = None, simple_mode=False):
     """
     Top-level wrapper function called by the UI Skulpt template string.
     Instantiates a Skulpt canvas turtle and maps parameters to the MOFRenderer object.
@@ -744,9 +758,11 @@ def draw_lattice(metal, linker_smiles, guest_ion=None, simple_mode=False):
     
     renderer = MOFRenderer(
         turtle_obj=t,
-        metal=str(metal).strip() if metal is not None else "",
-        linker_smiles=str(linker_smiles).strip() if linker_smiles is not None else "",
-        guest_ion=str(guest_ion).strip() if (guest_ion and str(guest_ion).strip() and str(guest_ion).lower() != "none") else None
+        metal=str(metal).strip() if metal else "",
+        linker_smiles=str(linker_smiles).strip() if linker_smiles else "",
+        mof_id=mof_id, 
+        guest_ion=guest_ion if guest_ion else None,
+        guest_ion_metadata=guest_ion_metadata if guest_ion_metadata else None
     )
     
     has_guest = renderer.guest_ion is not None

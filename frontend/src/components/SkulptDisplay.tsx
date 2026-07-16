@@ -199,7 +199,9 @@ const builtinRead = (filename: string): string => {
       const height = canvasRef.current?.clientHeight ?? 500;
 
       window.Sk.configure({
-        output: outf,
+        output: (text: string) => {
+          console.log("Python Output:", text);
+        },
         read: builtinRead,
       });
 

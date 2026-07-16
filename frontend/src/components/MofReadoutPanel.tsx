@@ -29,6 +29,7 @@ export interface PoreReadout {
   guest_ion_known: boolean | null;
   guest_ionic_radius: number | null;
   guest_hydrated_radius: number | null;
+  guest_ion_source: string | null;
 }
 
 interface MofReadoutPanelProps {
@@ -38,7 +39,7 @@ interface MofReadoutPanelProps {
 export const MofReadoutPanel: React.FC<MofReadoutPanelProps> = ({ readout }) => {
   if (!readout) return null;
 
-  const { lcd, pld, lcd_radius, pld_radius, guest_ion, guest_ion_known, guest_ionic_radius, guest_hydrated_radius } = readout;
+  const { lcd, pld, lcd_radius, pld_radius, guest_ion, guest_ion_known, guest_ionic_radius, guest_hydrated_radius, guest_ion_source } = readout;
 
   return (
     <div
@@ -80,6 +81,11 @@ export const MofReadoutPanel: React.FC<MofReadoutPanelProps> = ({ readout }) => 
           {guest_hydrated_radius !== null && (
             <div style={{ color: "#56B4E9" }}>
               {`Guest ion hydrated radius: ${guest_hydrated_radius.toFixed(2)} \u00c5`}
+            </div>
+          )}
+          {guest_ion_source !== null && (
+            <div style={{ color: "#e818de" }}>
+              {`Guest ion size is: ${guest_ion_source}`}
             </div>
           )}
         </>

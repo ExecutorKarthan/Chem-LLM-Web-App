@@ -2,6 +2,7 @@
 import time
 import os
 import re
+import sys
 import uuid
 import json
 import logging
@@ -27,6 +28,11 @@ from google.genai.errors import ClientError, ServerError
 # HTTP client (for catching low-level connection errors from Gemini)
 import httpx
 
+current_dir = Path(__file__).resolve().parent
+ion_registry_dir = current_dir.parent / "assets"
+sys.path.append(str(ion_registry_dir))
+from ion_registry import get_ion_metadata
+
 # Set up logger
 logger = logging.getLogger(__name__)
 
@@ -35,73 +41,6 @@ MOF_DATA_CSV_PATH = Path(settings.BASE_DIR) / "assets" / "MOF_data.csv"
 
 # In-memory engine cache for generated module sources
 _mof_data_cache = {"mtime": None, "source": None}
-
-# ─────────────────────────────────────────────────────────────────────────────
-# ION RADII CHEMICAL SCALING ARCHETYPES
-# ─────────────────────────────────────────────────────────────────────────────
-ION_RADII = {
-    "Li+":  (0.76,  3.40, "Experimentally Verified"),
-    "Na+":  (1.02,  3.58, "Experimentally Verified"),
-    "K+":   (1.38,  3.31, "Experimentally Verified"),
-    "Rb+":  (1.52,  3.29, "Experimentally Verified"),
-    "Cs+":  (1.67,  3.29, "Experimentally Verified"),
-    "Be2+": (0.45,  4.59, "Estimated / Unverified"),
-    "Mg2+": (0.72,  4.28, "Experimentally Verified"),
-    "Ca2+": (1.00,  4.12, "Experimentally Verified"),
-    "Sr2+": (1.18,  4.12, "Experimentally Verified"),
-    "Ba2+": (1.35,  4.04, "Experimentally Verified"),
-    "Cu+":  (0.77,  3.20, "Estimated / Unverified"),
-    "V2+":  (0.79,  4.30, "Estimated / Unverified"),
-    "Cr2+": (0.73,  4.25, "Estimated / Unverified"),
-    "Mn2+": (0.67,  4.38, "Experimentally Verified"),
-    "Fe2+": (0.61,  4.28, "Experimentally Verified"),
-    "Co2+": (0.65,  4.23, "Experimentally Verified"),
-    "Ni2+": (0.69,  4.04, "Experimentally Verified"),
-    "Cu2+": (0.73,  4.19, "Experimentally Verified"),
-    "Zn2+": (0.74,  4.30, "Experimentally Verified"),
-    "Ti2+": (0.86,  4.35, "Estimated / Unverified"),
-    "Sn2+": (1.12,  3.95, "Estimated / Unverified"),
-    "Pb2+": (1.19,  4.01, "Estimated / Unverified"),
-    "Ti3+": (0.67,  4.65, "Estimated / Unverified"),
-    "V3+":  (0.64,  4.60, "Estimated / Unverified"),
-    "Cr3+": (0.62,  4.61, "Estimated / Unverified"),
-    "Mn3+": (0.58,  4.60, "Estimated / Unverified"),
-    "Fe3+": (0.55,  4.57, "Experimentally Verified"),
-    "Co3+": (0.55,  4.55, "Estimated / Unverified"),
-    "Ti4+": (0.61,  4.70, "Estimated / Unverified"),
-    "V4+":  (0.58,  4.70, "Estimated / Unverified"),
-    "Mn4+": (0.53,  4.75, "Estimated / Unverified"),
-    "V5+":  (0.54,  4.80, "Estimated / Unverified"),
-    "Cr6+": (0.44,  4.90, "Estimated / Unverified"),
-    "Mn7+": (0.46,  4.90, "Estimated / Unverified"),
-    "Al3+": (0.54,  4.75, "Experimentally Verified"),
-    "Ga3+": (0.62,  4.65, "Estimated / Unverified"),
-    "In3+": (0.80,  4.63, "Estimated / Unverified"),
-    "Sn4+": (0.69,  4.65, "Estimated / Unverified"),
-    "Pb4+": (0.78,  4.60, "Estimated / Unverified"),
-    "Sc3+": (0.75,  4.50, "Experimentally Verified"),
-    "Y3+":  (0.90,  4.40, "Experimentally Verified"),
-    "La3+": (1.03,  4.52, "Experimentally Verified"),
-    "Ce3+": (1.01,  4.51, "Estimated / Unverified"),
-    "Ce4+": (0.87,  4.65, "Estimated / Unverified"),
-    "Nd3+": (0.98,  4.48, "Estimated / Unverified"),
-    "Gd3+": (0.94,  4.45, "Estimated / Unverified"),
-    "Lu3+": (0.86,  4.39, "Estimated / Unverified"),
-    "U3+":  (1.03,  4.73, "Estimated / Unverified"),
-    "U4+":  (0.89,  4.83, "Estimated / Unverified"),
-    "U6+":  (0.73,  4.85, "Estimated / Unverified"),
-    "Np3+": (1.01,  4.72, "Estimated / Unverified"),
-    "Np4+": (0.87,  4.84, "Estimated / Unverified"),
-    "Pu3+": (1.00,  4.71, "Estimated / Unverified"),
-    "Pu4+": (0.86,  4.82, "Estimated / Unverified"),
-    "Am3+": (0.98,  4.70, "Estimated / Unverified"),
-    "Am4+": (0.85,  4.80, "Estimated / Unverified"),
-    "Ac3+": (1.12,  4.75, "Estimated / Unverified"),
-    "Th4+": (0.94,  4.87, "Estimated / Unverified"),
-    "Pa4+": (0.90,  4.85, "Estimated / Unverified"),
-    "Pa5+": (0.78,  4.90, "Estimated / Unverified"),
-}
-
 
 ############################################
 # CSRF Token endpoint
@@ -817,75 +756,69 @@ def generate_mof_code(request):
     metal = request.data.get("metal")
     linker = request.data.get("linker")
     guest_ion = request.data.get("guest_ion")
+    guest_ion_metadata = get_ion_metadata(guest_ion)
     simple_mode = request.data.get("simple_mode", False)
 
     if not metal or not linker:
         return Response({"error": "Both a metal and a linker must be selected."}, status=400)
 
+    # 1. Resolve the ID via your existing index logic
     mof_id = mof_index.find_mof(metal, linker)
     if mof_id is None:
-        return Response(
-            {"error": f"No mono-metal, mono-linker MOF found for metal '{metal}' and linker '{linker}'."},
-            status=404,
-        )
+        return Response({"error": f"..."}, status=404)
 
     metrics = mof_index.get_metrics(mof_id)
     if metrics is None or metrics["lcd"] is None or metrics["pld"] is None:
-        return Response(
-            {"error": f"MOF '{mof_id}' was found but its structural metrics are incomplete."},
-            status=404,
-        )
+        return Response({"error": f"..."}, status=404)
 
-    target_lcd = metrics["lcd"]
-    target_pld = metrics["pld"]
-
-    # No print() calls here — Skulpt's stdout console stays clean.
-    # draw_lattice's real signature is (metal, linker_smiles, guest_ion, simple_mode);
-    # LCD/PLD are looked up client-side by MOFRenderer itself, not passed in.
+    # 2. Inject the mof_id into the Python script string
+    # We pass it as a named argument to draw_lattice
     python_script = f"""
 import mof_renderer
 
 metal_ion = "{metal}"
 linker_smiles = "{linker}"
 guest_ion = "{guest_ion if guest_ion else 'None'}"
+guest_ion_metadata = "{guest_ion_metadata if guest_ion_metadata else 'None'}"
 simple_mode = {simple_mode}
+mof_id = "{mof_id}"  
 
-mof_renderer.draw_lattice(metal_ion, linker_smiles, guest_ion, simple_mode)
+mof_renderer.draw_lattice(
+    metal=metal_ion, 
+    linker_smiles=linker_smiles, 
+    mof_id=mof_id,      
+    guest_ion=guest_ion, 
+    guest_ion_metadata=guest_ion_metadata,
+    simple_mode=simple_mode
+)
 """
-
-    readout = _build_pore_readout(target_lcd, target_pld, guest_ion)
+    readout = _build_pore_readout(metrics["lcd"], metrics["pld"], guest_ion)
 
     return Response({"code": python_script.strip(), "readout": readout}, status=status.HTTP_200_OK)
 
-
 def _build_pore_readout(lcd, pld, guest_ion):
     """
-    Plain-data pore readout payload. No labels, definitions, or formatting
-    here — MofReadoutPanel.tsx owns all presentation. This only computes
-    the numeric values the panel needs.
+    Constructs the readout payload including ion verification metadata.
     """
-    readout = {
+    # Fetch ion data: (ionic_r, hydrated_r, source)
+    ion_metadata = get_ion_metadata(guest_ion) if guest_ion else {}
+    
+    # Extract values or None
+    guest_ionic = ion_metadata[0]
+    guest_hydrated = ion_metadata[1]
+    source = ion_metadata[2]
+
+    return {
         "lcd": lcd,
         "pld": pld,
         "lcd_radius": lcd / 2,
         "pld_radius": pld / 2,
-        "guest_ion": guest_ion or None,
-        "guest_ion_known": None,       # True / False / None (no ion selected)
-        "guest_ionic_radius": None,
-        "guest_hydrated_radius": None,
+        "guest_ion": guest_ion,
+        "guest_ion_known": guest_ion is not None and guest_ionic is not None,
+        "guest_ionic_radius": guest_ionic,
+        "guest_hydrated_radius": guest_hydrated,
+        "guest_ion_source": source  
     }
-
-    if guest_ion:
-        entry = ION_RADII.get(guest_ion)
-        if entry:
-            ionic_ang, hydrated_ang, _verified = entry
-            readout["guest_ion_known"] = True
-            readout["guest_ionic_radius"] = ionic_ang
-            readout["guest_hydrated_radius"] = hydrated_ang
-        else:
-            readout["guest_ion_known"] = False
-
-    return readout
 
 @api_view(["GET"])
 def get_mof_engine_file(request, filename):
