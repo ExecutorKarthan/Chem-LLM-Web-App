@@ -3,10 +3,14 @@ import { useState } from "react";
 import axios from "axios";
 import LLMEntryBox from "./LLMEntryBox.js";
 import LLMResponseBox from "./LLMResponseBox.js";
-import { Row, Col } from "antd";
+import { Row, Col, Switch } from "antd";
 import { BACKEND_URL } from "../config.js";
 import SmilesInput from "./SMILESInput.js";
 import MoleculeViewer from "./MoleculeViewer.js";
+import MOFInput from "./MOFInput.js";
+import type { PoreReadout } from "./MOFInput.js";
+import MofReadoutPanel from "./MofReadoutPanel.js";
+import SkulptDisplay from "./SkulptDisplay.js";
 
 // Helper function to get CSRF token from cookies
 function getCookie(name: string): string | undefined {
@@ -28,6 +32,17 @@ const ChemApp = () => {
   const [loading, setLoading] = useState<boolean>(false);
   const [submittedSmiles, setSubmittedSmiles] = useState<string[]>([]);
   const [submittedSubstructure, setSubmittedSubstructure] = useState<string>("");
+  const [linkerViewerMode, setLinkerViewerMode] = useState<boolean>(false);
+  const [mofCode, setMofCode] = useState<string>("");
+  const [mofReadout, setMofReadout] = useState<PoreReadout | null >(null);
+
+  // --- CONTROL HOOK STATES ---
+  const [showSkulptCanvas, setShowSkulptCanvas] = useState<boolean>(false);
+  const [activeDropdownLinker, setActiveDropdownLinker] = useState<string>("");
+
+  // States for labels: one for single MOF, one for array-based SMILES
+  const [linkerCommonName, setLinkerCommonName] = useState<string>("");
+  const [linkerCommonNames, setLinkerCommonNames] = useState<string[]>([]);
 
   const beginRequest = () => {
     setLoading(true);
@@ -106,10 +121,33 @@ const ChemApp = () => {
     }
   };
 
-  // Receives both the molecule list and the substructure query from SmilesInput
-  const handleSubmitSmiles = (smilesList: string[], substructure: string) => {
+  // Receives the molecule list and the substructure query from SmilesInput
+  const handleSubmitSmiles = async (smilesList: string[], substructure: string) => {
     setSubmittedSmiles(smilesList);
     setSubmittedSubstructure(substructure);
+
+    // Initialize array with default labels
+    const names = new Array(smilesList.length).fill("");
+    setLinkerCommonNames(names);
+
+    // Resolve common names via PubChem
+    smilesList.forEach(async (smiles, index) => {
+      try {
+        const encoded = encodeURIComponent(smiles);
+        const cidRes = await axios.get(`https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/smiles/${encoded}/cids/JSON`);
+        const cid = cidRes.data.IdentifierList.CID[0];
+        const synRes = await axios.get(`https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/${cid}/synonyms/JSON`);
+        const name = synRes.data.InformationList.Information[0].Synonym[0];
+
+        setLinkerCommonNames(prev => {
+          const next = [...prev];
+          next[index] = name;
+          return next;
+        });
+      } catch (e) {
+        console.warn(`Could not resolve name for molecule ${index + 1}`);
+      }
+    });
   };
 
   const colStyle = (extra?: React.CSSProperties): React.CSSProperties => ({
@@ -151,20 +189,73 @@ const ChemApp = () => {
         </Col>
       </Row>
 
-      {/* ── Row 2: SMILES Input | Molecule Viewer ── */}
+      {/* ── Mode toggle ── */}
+      <Row justify="center" style={{ marginBottom: 8 }}>
+        <Col xs={24} style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 10 }}>
+          <span style={{ fontSize: 13, color: linkerViewerMode ? "#aaa" : "#333", fontWeight: 500 }}>
+            MOF Explorer
+          </span>
+          <Switch 
+            checked={linkerViewerMode} 
+            onChange={(checked) => {
+              setLinkerViewerMode(checked);
+              setMofCode("");
+              setMofReadout(null);
+              setShowSkulptCanvas(false);
+              setActiveDropdownLinker("");
+              setLinkerCommonName("");
+              setLinkerCommonNames([]);
+            }}
+          />
+          <span style={{ fontSize: 13, color: linkerViewerMode ? "#333" : "#aaa", fontWeight: 500 }}>
+            Linker Viewer
+          </span>
+        </Col>
+      </Row>
+
+      {/* ── Row 2: SMILES Input | Molecule Viewer  —or—  MOF Input | Skulpt Display ── */}
       <Row gutter={[16, 16]} justify="center" wrap>
         <Col
           xs={24}
           md={12}
           style={colStyle({ minHeight: 350, display: "flex", flexDirection: "column" })}
         >
-          <SmilesInput onSubmitSmiles={handleSubmitSmiles} />
+          {linkerViewerMode ? (
+            <SmilesInput onSubmitSmiles={handleSubmitSmiles} />
+          ) : (
+            <MOFInput 
+              onCodeReady={setMofCode} 
+              onReadout={setMofReadout} 
+              setShowSkulpt={setShowSkulptCanvas}
+              onLinkerSelect={(linker) => {
+                setActiveDropdownLinker(linker);
+                setLinkerCommonName("");
+              }}
+              onLinkerNameUpdate={setLinkerCommonName}
+            />
+          )}
         </Col>
         <Col xs={24} md={12} style={colStyle({ overflowY: "auto" })}>
-          <MoleculeViewer
-            smiles={submittedSmiles}
-            substructure={submittedSubstructure}
-          />
+          {linkerViewerMode ? (
+            <MoleculeViewer
+              smiles={submittedSmiles}
+              substructure={submittedSubstructure}
+              linkerNames={linkerCommonNames}
+            />
+          ) : (
+            showSkulptCanvas ? (
+              <div id="skulpt-canvas-container" style={{ width: "100%" }}>
+                <SkulptDisplay code={mofCode} />
+                <MofReadoutPanel readout={mofReadout} />
+              </div>
+            ) : (
+              <MoleculeViewer
+                smiles={activeDropdownLinker ? [activeDropdownLinker] : []}
+                substructure=""
+                linkerName={linkerCommonName}
+              />
+            )
+          )}
         </Col>
       </Row>
     </>

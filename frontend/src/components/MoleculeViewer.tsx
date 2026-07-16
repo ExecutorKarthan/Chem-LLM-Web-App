@@ -9,6 +9,8 @@ import initRDKitModule from "@rdkit/rdkit";
 interface MoleculeViewerProps {
   smiles: string[];
   substructure: string;
+  linkerName?: string;    // Kept for backward compatibility with MOF Explorer
+  linkerNames?: string[]; // ADDED: Prop for the common names array
 }
 
 // ─── RDKit singleton ──────────────────────────────────────────────────────────
@@ -89,24 +91,17 @@ const MoleculePanel: React.FC<MoleculePanelProps> = ({ smiles, label, substructu
               return;
             }
 
-            // Build highlight details — substructure match if provided,
-            // otherwise plain size options
             let mdetails: Record<string, any> = { width, height };
 
             if (substructure.trim()) {
               try {
                 qmol = RDKit.get_qmol(substructure.trim());
-
                 if (qmol && qmol.is_valid()) {
                   const matchJson = mol.get_substruct_match(qmol);
                   const match = JSON.parse(matchJson);
-
-                  // get_substruct_match returns {} when there is no match
-                  const hasMatch =
-                    match.atoms && match.atoms.length > 0;
+                  const hasMatch = match.atoms && match.atoms.length > 0;
 
                   if (hasMatch) {
-                    // Merge match highlights with size
                     mdetails = { ...match, width, height };
                     setMatchNote("✓ Substructure match found");
                   } else {
@@ -122,8 +117,6 @@ const MoleculePanel: React.FC<MoleculePanelProps> = ({ smiles, label, substructu
             }
 
             const svg = mol.get_svg_with_highlights(JSON.stringify(mdetails));
-
-            // Make width fluid so SVG never overflows narrow screens
             const patched = svg
               .replace(/width="\d+"/, `width="100%"`)
               .replace(/height="\d+"/, `height="${height}"`);
@@ -172,7 +165,6 @@ const MoleculePanel: React.FC<MoleculePanelProps> = ({ smiles, label, substructu
       <div style={{ fontSize: 12, fontWeight: 600, color: "#555", marginBottom: 2 }}>
         {label}
       </div>
-
       <div
         style={{
           fontFamily: "monospace",
@@ -185,11 +177,8 @@ const MoleculePanel: React.FC<MoleculePanelProps> = ({ smiles, label, substructu
       >
         {smiles}
       </div>
-
       {loading && <div style={{ color: "#555", fontSize: 12 }}>Rendering...</div>}
       {error && <div style={{ color: "red", fontSize: 12 }}>{error}</div>}
-
-      {/* Match note — green for hit, grey for no match, amber for invalid */}
       {matchNote && (
         <div
           style={{
@@ -205,7 +194,6 @@ const MoleculePanel: React.FC<MoleculePanelProps> = ({ smiles, label, substructu
           {matchNote}
         </div>
       )}
-
       <div ref={outerRef} style={{ width: "100%", overflow: "hidden" }}>
         <div ref={svgContainerRef} style={{ width: "100%", lineHeight: 0 }} />
       </div>
@@ -214,7 +202,7 @@ const MoleculePanel: React.FC<MoleculePanelProps> = ({ smiles, label, substructu
 };
 
 // ─── Main viewer ──────────────────────────────────────────────────────────────
-const MoleculeViewer: React.FC<MoleculeViewerProps> = ({ smiles, substructure }) => {
+const MoleculeViewer: React.FC<MoleculeViewerProps> = ({ smiles, substructure, linkerName, linkerNames }) => {
   if (!smiles || smiles.length === 0) {
     return (
       <div style={{ width: "100%" }}>
@@ -229,6 +217,20 @@ const MoleculeViewer: React.FC<MoleculeViewerProps> = ({ smiles, substructure })
   return (
     <div style={{ width: "100%" }}>
       <h3 style={{ margin: "0 0 12px 0" }}>Molecule Viewer</h3>
+      
+      {/* Show single linker name if provided (MOF Explorer mode) */}
+      {linkerName && (
+        <div style={{ 
+          textAlign: "center", 
+          marginBottom: 16, 
+          fontWeight: 700, 
+          color: "#333",
+          fontSize: 14 
+        }}>
+          {linkerName}
+        </div>
+      )}
+
       <div
         style={{
           display: "grid",
@@ -236,14 +238,15 @@ const MoleculeViewer: React.FC<MoleculeViewerProps> = ({ smiles, substructure })
           gap: 12,
         }}
       >
-        {smiles.map((s, i) => (
-          <MoleculePanel
-            key={`${i}-${s}`}
-            smiles={s}
-            label={`Molecule ${i + 1}`}
-            substructure={substructure}
-          />
-        ))}
+      {smiles.map((s, i) => (
+        <MoleculePanel
+          key={`${i}-${s}`}
+          smiles={s}
+          // Prioritize linkerNames array, fallback to single linkerName, then default label
+          label={linkerNames?.[i] || linkerName || `Molecule ${i + 1}`} 
+          substructure={substructure}
+        />
+      ))}
       </div>
     </div>
   );
