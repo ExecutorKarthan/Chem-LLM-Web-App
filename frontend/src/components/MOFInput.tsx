@@ -69,11 +69,25 @@ export const MOFInput: React.FC<MOFInputProps> = ({ onCodeReady, onReadout, setS
   }, []);
 
   useEffect(() => {
-    if (!selectedMetal && !selectedLinker) return;
+  // If no linker is selected, clear the name and return
+  if (!selectedLinker) {
+    onLinkerNameUpdate("");
+    return;
+  }
 
-    const params = searchMode === "metalFirst" ? { metal: selectedMetal } : { linker: selectedLinker };
+  // Trigger the API call specifically when a linker is selected
+  axios.get(`${BACKEND_URL}/api/mof-filter/`, { params: { linker: selectedLinker } })
+    .then((res) => {
+      const commonName = res.data.common_name || "";
+      onLinkerNameUpdate(commonName);
+    })
+    .catch((err) => console.error("Linker name resolution failed:", err));
+}, [selectedLinker, onLinkerNameUpdate]); // Only watches linker
 
-    axios.get(`${BACKEND_URL}/api/mof-filter/`, { params })
+  useEffect(() => {
+if (!selectedMetal || !selectedLinker) return;
+
+    axios.get(`${BACKEND_URL}/api/mof-filter/`, { params: { metal: selectedMetal, linker: selectedLinker }})
       .then((res) => {
         const results = res.data.results;
         const commonName = res.data.common_name || "";
@@ -97,8 +111,6 @@ export const MOFInput: React.FC<MOFInputProps> = ({ onCodeReady, onReadout, setS
     setFilteredLinkers(allLinkers);
     setFilteredMetals(allMetals);
     setShowSkulpt(false);
-    
-    // --- THIS IS THE MISSING PIECE ---
     onLinkerNameUpdate(""); 
     
     if (onLinkerSelect) onLinkerSelect("");

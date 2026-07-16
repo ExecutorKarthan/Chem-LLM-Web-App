@@ -227,7 +227,10 @@ const ChemApp = () => {
               onCodeReady={setMofCode} 
               onReadout={setMofReadout} 
               setShowSkulpt={setShowSkulptCanvas}
-              onLinkerSelect={setActiveDropdownLinker} 
+              onLinkerSelect={(linker) => {
+                setActiveDropdownLinker(linker);
+                setLinkerCommonName("");
+              }}
               onLinkerNameUpdate={setLinkerCommonName}
             />
           )}
