@@ -263,25 +263,6 @@ const builtinRead = (filename: string): string => {
           width: "100%",
         }}
       />
-
-      {outputText.trim() !== "" && (
-        <pre
-          ref={outputRef}
-          style={{
-            backgroundColor: "#f5f5f5",
-            padding: 10,
-            minHeight: 60,
-            maxHeight: 160,
-            overflowY: "auto",
-            whiteSpace: "pre-wrap",
-            marginTop: 10,
-            width: "100%",
-            boxSizing: "border-box",
-            fontSize: 12,
-          }}
-          dangerouslySetInnerHTML={{ __html: outputText }}
-        />
-      )}
     </div>
   );
 };

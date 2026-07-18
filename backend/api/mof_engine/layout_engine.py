@@ -9,7 +9,6 @@ class LayoutEngine:
         self.mol = mol
         self.visited = set()
         self.bond_length = 65
-        self.ring_size = 85
 
     def layout(self):
         # 1. Initialize coordinates to clear undefined state traps
@@ -26,7 +25,7 @@ class LayoutEngine:
             for atom in ring:
                 self.atom_rings.setdefault(atom, []).append(ring)
 
-        self.ring_layout = RingLayout(self.mol, ring_size=self.ring_size)
+        self.ring_layout = RingLayout(self.mol, bond_length=self.bond_length)
         self.placed_ring_ids = set()
 
         # 2. Single DFS sweep that places rings AND chain atoms/branches
@@ -41,7 +40,11 @@ class LayoutEngine:
         # coordinates so it doesn't default to (0, 0) on top of atom 0.
         self.layout_disconnected_fragments()
 
-        # 4. Force relaxation to clean up remaining local overlaps
+        # 4. Group fused rings into rigid clusters so relaxation can
+        # translate them as whole units instead of deforming them.
+        self._build_ring_clusters()
+
+        # 5. Force relaxation to clean up remaining local overlaps
         self.relax(iterations=150)
 
         # Apply specific target metal geometry configuration rules
@@ -61,10 +64,10 @@ class LayoutEngine:
             if any(a in self.visited for a in ring):
                 # Fused ring: one (or two, for edge-fusion) of its atoms
                 # were already placed while laying out a neighboring
-                # ring. Anchor on that atom instead of moving it.
+                # ring.
                 shared = next(a for a in ring if a in self.visited)
-                away_angle = self._angle_away_from_other_ring(shared, ring)
-                self.ring_layout.place_fused_ring(ring, shared, away_angle, self.visited)
+                reference_point = self._reference_point_from_other_ring(shared, ring)
+                self.ring_layout.place_fused_ring(ring, self.visited, reference_point)
             else:
                 self.ring_layout.place_ring(ring, atom, x, y, angle)
 
@@ -127,22 +130,20 @@ class LayoutEngine:
             return 0.0
         return math.degrees(math.atan2(atom.y - cy, atom.x - cx))
 
-    def _angle_away_from_other_ring(self, shared_atom, new_ring):
+    def _reference_point_from_other_ring(self, shared_atom, new_ring):
         """For a fused ring, find whichever already-placed ring also
-        contains the shared atom and point the new ring's center away
-        from that ring's centroid."""
+        contains the shared atom and return its centroid, so the new
+        ring can be placed on the far side of that point."""
         other_rings = [
             r for r in self.atom_rings.get(shared_atom, [])
             if r is not new_ring and id(r) in self.placed_ring_ids
         ]
         if not other_rings:
-            return 0.0
+            return (shared_atom.x, shared_atom.y)
         r = other_rings[0]
         cx = sum(a.x for a in r) / len(r)
         cy = sum(a.y for a in r) / len(r)
-        if shared_atom.x == cx and shared_atom.y == cy:
-            return 0.0
-        return math.degrees(math.atan2(shared_atom.y - cy, shared_atom.x - cx))
+        return (cx, cy)
 
     def layout_disconnected_fragments(self):
         remaining = [a for a in self.mol.atoms if a not in self.visited]
@@ -177,30 +178,90 @@ class LayoutEngine:
         return component
 
     # -------------------------
+    # RIGID RING CLUSTERS
+    # -------------------------
+
+    def _build_ring_clusters(self):
+        """
+        Groups rings that share at least one atom (fused/ortho-fused
+        systems, e.g. the 4-ring core of a triphenylene-type linker)
+        into single rigid clusters. Atoms in the same cluster keep the
+        exact relative geometry `RingLayout` gave them — regular
+        interior angles included — through the relaxation pass; the
+        cluster as a whole is still free to be nudged around by forces
+        from atoms/clusters outside it.
+        """
+        n = len(self.rings)
+        parent = list(range(n))
+
+        def find(k):
+            while parent[k] != k:
+                parent[k] = parent[parent[k]]
+                k = parent[k]
+            return k
+
+        def union(k1, k2):
+            r1, r2 = find(k1), find(k2)
+            if r1 != r2:
+                parent[r1] = r2
+
+        atom_ring_idxs = {}
+        for i, ring in enumerate(self.rings):
+            for a in ring:
+                atom_ring_idxs.setdefault(a, []).append(i)
+        for idxs in atom_ring_idxs.values():
+            for k in idxs[1:]:
+                union(idxs[0], k)
+
+        root_to_cluster_id = {}
+        self.atom_cluster = {}
+        self.cluster_atoms = []
+        for i, ring in enumerate(self.rings):
+            root = find(i)
+            if root not in root_to_cluster_id:
+                root_to_cluster_id[root] = len(self.cluster_atoms)
+                self.cluster_atoms.append(set())
+            cid = root_to_cluster_id[root]
+            for a in ring:
+                self.cluster_atoms[cid].add(a)
+                self.atom_cluster[a] = cid
+
+    # -------------------------
     # FORCE RELAXATION
     # -------------------------
 
     def relax(self, iterations=150):
         for _ in range(iterations):
-            self.apply_repulsion()
-            self.apply_bond_attraction()
+            deltas = {a: [0.0, 0.0] for a in self.mol.atoms}
+            self._accumulate_repulsion(deltas)
+            self._accumulate_bond_attraction(deltas)
+            self._rigidify_clusters(deltas)
+            for a, (dx, dy) in deltas.items():
+                a.x += dx
+                a.y += dy
 
-    def apply_repulsion(self):
+    def _same_cluster(self, a, b):
+        ca = self.atom_cluster.get(a)
+        cb = self.atom_cluster.get(b)
+        return ca is not None and ca == cb
+
+    def _accumulate_repulsion(self, deltas):
         atoms = self.mol.atoms
         for i in range(len(atoms)):
             for j in range(i + 1, len(atoms)):
                 a = atoms[i]
                 b = atoms[j]
 
+                if self._same_cluster(a, b):
+                    # Same rigid ring cluster — relative geometry (and
+                    # interior angles) are already correct; don't fight it.
+                    continue
+
                 dx = a.x - b.x
                 dy = a.y - b.y
                 dist = math.sqrt(dx * dx + dy * dy)
 
                 if dist < 1e-6:
-                    # Perfectly (or near-) overlapping atoms have no
-                    # well-defined push direction — dx/dy is just noise
-                    # at that scale. Nudge them apart deterministically
-                    # instead of letting the relaxation destabilize.
                     angle = (i - j) * 2.399963229  # golden angle, radians
                     dx, dy = math.cos(angle), math.sin(angle)
                     dist = 1e-3
@@ -208,24 +269,41 @@ class LayoutEngine:
                 min_distance = 75 if (getattr(a, 'aromatic', False) or getattr(b, 'aromatic', False)) else 60
                 if dist < min_distance:
                     force = (min_distance - dist) * 0.45
-                    a.x += (dx / dist) * force
-                    a.y += (dy / dist) * force
-                    b.x -= (dx / dist) * force
-                    b.y -= (dy / dist) * force
+                    fx, fy = (dx / dist) * force, (dy / dist) * force
+                    deltas[a][0] += fx
+                    deltas[a][1] += fy
+                    deltas[b][0] -= fx
+                    deltas[b][1] -= fy
 
-    def apply_bond_attraction(self):
+    def _accumulate_bond_attraction(self, deltas):
         for bond in self.mol.bonds:
-            a = bond.a
-            b = bond.b
+            a, b = bond.a, bond.b
+
+            if self._same_cluster(a, b):
+                # Ring-internal bond — spacing is already exactly
+                # bond_length from RingLayout; nothing to pull.
+                continue
 
             dx = b.x - a.x
             dy = b.y - a.y
             dist = math.sqrt(dx * dx + dy * dy) + 0.01
 
-            desired = self.bond_length
-            force = (dist - desired) * 0.25
+            force = (dist - self.bond_length) * 0.25
+            fx, fy = (dx / dist) * force, (dy / dist) * force
+            deltas[a][0] += fx
+            deltas[a][1] += fy
+            deltas[b][0] -= fx
+            deltas[b][1] -= fy
 
-            a.x += (dx / dist) * force
-            a.y += (dy / dist) * force
-            b.x -= (dx / dist) * force
-            b.y -= (dy / dist) * force
+    def _rigidify_clusters(self, deltas):
+        """Replace each cluster atom's individual delta with the
+        cluster's average delta, so the whole ring (or fused-ring group)
+        moves together as one rigid body instead of stretching."""
+        for cluster in self.cluster_atoms:
+            if not cluster:
+                continue
+            avg_dx = sum(deltas[a][0] for a in cluster) / len(cluster)
+            avg_dy = sum(deltas[a][1] for a in cluster) / len(cluster)
+            for a in cluster:
+                deltas[a][0] = avg_dx
+                deltas[a][1] = avg_dy
