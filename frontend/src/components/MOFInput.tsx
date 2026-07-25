@@ -36,7 +36,6 @@ export const MOFInput: React.FC<MOFInputProps> = ({
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Initial Load
   useEffect(() => {
     axios.get(`${BACKEND_URL}/api/mof-meta/`).then((res) => {
       setGuestIons(res.data.guest_ions || []);
@@ -48,7 +47,6 @@ export const MOFInput: React.FC<MOFInputProps> = ({
     }).catch(() => setError("Failed to fetch initial database."));
   }, []);
 
-  // Filter Logic: Triggered only by Primary Selection
   useEffect(() => {
     if (searchMode === "metalFirst") {
       if (!selectedMetal) {
@@ -99,90 +97,54 @@ export const MOFInput: React.FC<MOFInputProps> = ({
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <h3>MOF Configurator</h3>
+      {error && <Alert message={error} type="error" showIcon closable onClose={() => setError(null)} />}
       <Form layout="vertical">
-    <Form.Item label="Search Priority Type">
-      <Radio.Group value={searchMode} onChange={(e) => { setSearchMode(e.target.value); handleReset(); }}>
-        <Radio.Button value="metalFirst">Filter by Metal first</Radio.Button>
-        <Radio.Button value="linkerFirst">Filter by Linker first</Radio.Button>
-      </Radio.Group>
-    </Form.Item>
+        <Form.Item label="Search Priority Type">
+          <Radio.Group value={searchMode} onChange={(e) => { setSearchMode(e.target.value); handleReset(); }}>
+            <Radio.Button value="metalFirst">Filter by Metal first</Radio.Button>
+            <Radio.Button value="linkerFirst">Filter by Linker first</Radio.Button>
+          </Radio.Group>
+        </Form.Item>
 
-    {/* ─── DYNAMIC LAYOUT: Priority Selectors ─── */}
-    {searchMode === "metalFirst" ? (
-      <>
-        {/* Metal First: Metal is Primary */}
-        <Form.Item label="Metal Core Selection">
-          <Select
-            showSearch
-            placeholder="Select a metal"
-            value={selectedMetal}
-            onChange={(val) => {
-              setSelectedMetal(val);
-              setSelectedLinker(undefined); // Reset dependency
-              onLinkerNameUpdate("");
-            }}
-            options={allMetals}
-            filterOption={(input, opt) => (opt?.value ?? "").toLowerCase().includes(input.toLowerCase())}
-          />
-        </Form.Item>
-        <Form.Item label="Organic Structural Linker">
-          <Select
-            showSearch
-            placeholder="Search linker"
-            value={selectedLinker}
-            disabled={!selectedMetal} // Greys out until metal is selected
-            onChange={(val) => {
-              setSelectedLinker(val);
-              if (onLinkerSelect) onLinkerSelect(val);
-              if (val) {
-                axios.get(`${BACKEND_URL}/api/mof-filter/`, { params: { metal: selectedMetal, linker: val } })
-                  .then(res => onLinkerNameUpdate(res.data.common_name || ""));
-              }
-            }}
-            options={filteredLinkers}
-            filterOption={(input, opt) => (opt?.value ?? "").toLowerCase().includes(input.toLowerCase())}
-          />
-        </Form.Item>
-      </>
-    ) : (
-      <>
-        {/* Linker First: Linker is Primary */}
-        <Form.Item label="Organic Structural Linker">
-          <Select
-            showSearch
-            placeholder="Search linker"
-            value={selectedLinker}
-            onChange={(val) => {
-              setSelectedLinker(val);
-              setSelectedMetal(undefined); // Reset dependency
-              if (onLinkerSelect) onLinkerSelect(val);
-              if (val) {
-                axios.get(`${BACKEND_URL}/api/mof-filter/`, { params: { linker: val } })
-                  .then(res => onLinkerNameUpdate(res.data.common_name || ""));
-              }
-            }}
-            options={allLinkers}
-            filterOption={(input, opt) => (opt?.value ?? "").toLowerCase().includes(input.toLowerCase())}
-          />
-        </Form.Item>
-        <Form.Item label="Metal Core Selection">
-          <Select
-            showSearch
-            placeholder="Select a metal"
-            value={selectedMetal}
-            disabled={!selectedLinker} // Greys out until linker is selected
-            onChange={setSelectedMetal}
-            options={filteredMetals}
-            filterOption={(input, opt) => (opt?.value ?? "").toLowerCase().includes(input.toLowerCase())}
-          />
-        </Form.Item>
-      </>
-    )}
+        {searchMode === "metalFirst" ? (
+          <>
+            <Form.Item label="Metal Core Selection">
+              <Select showSearch value={selectedMetal} onChange={(v) => { setSelectedMetal(v); setSelectedLinker(undefined); onLinkerNameUpdate(""); }} options={allMetals} />
+            </Form.Item>
+            <Form.Item label="Organic Structural Linker">
+              <Select showSearch value={selectedLinker} disabled={!selectedMetal} options={filteredLinkers} onChange={(v) => { setSelectedLinker(v); if (onLinkerSelect) onLinkerSelect(v); axios.get(`${BACKEND_URL}/api/mof-filter/`, { params: { metal: selectedMetal, linker: v } }).then(res => onLinkerNameUpdate(res.data.common_name || "")); }} />
+            </Form.Item>
+          </>
+        ) : (
+          <>
+            <Form.Item label="Organic Structural Linker">
+              <Select showSearch value={selectedLinker} options={allLinkers} onChange={(v) => { setSelectedLinker(v); setSelectedMetal(undefined); if (onLinkerSelect) onLinkerSelect(v); axios.get(`${BACKEND_URL}/api/mof-filter/`, { params: { linker: v } }).then(res => onLinkerNameUpdate(res.data.common_name || "")); }} />
+            </Form.Item>
+            <Form.Item label="Metal Core Selection">
+              <Select showSearch value={selectedMetal} disabled={!selectedLinker} options={filteredMetals} onChange={setSelectedMetal} />
+            </Form.Item>
+          </>
+        )}
 
-        <Button type="primary" onClick={handleGenerate} loading={loading} disabled={!selectedMetal || !selectedLinker}>
-          Compute Structure
-        </Button>
-        <Button onClick={handleReset}>Reset</Button>
+        <div style={{ margin: "8px 0 16px 0", borderTop: "1px solid #eee", paddingTop: 12 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+            <span style={{ fontSize: 13, fontWeight: 500 }}>Simulate Guest Ion</span>
+            <Switch checked={showGuest} onChange={setShowGuest} size="small" />
+          </div>
+          {showGuest && (
+            <Select showSearch value={guestIon} onChange={setGuestIon} options={guestIons.map(i => ({ value: i, label: i }))} />
+          )}
+        </div>
+
+        <div style={{ borderTop: "1px solid #eee", paddingTop: 12, display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+          <span style={{ fontSize: 12, fontWeight: 500 }}>Simple path rendering</span>
+          <Switch checked={simpleMode} onChange={setSimpleMode} size="small" />
+        </div>
+
+        <div style={{ display: "flex", gap: 8 }}>
+          <Button type="primary" onClick={handleGenerate} loading={loading} disabled={!selectedMetal || !selectedLinker}>Compute Structure</Button>
+          <Button onClick={handleReset}>Reset</Button>
+        </div>
       </Form>
     </div>
   );

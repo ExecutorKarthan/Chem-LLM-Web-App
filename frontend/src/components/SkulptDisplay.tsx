@@ -88,6 +88,20 @@ const fetchMofEngineFileSync = (moduleName: string): string => {
   return xhr.responseText;
 };
 
+// Full element names for the legend labels — purely descriptive chemistry
+// facts (not derived from the renderer), so hardcoding this doesn't create
+// a drift risk the way duplicating ATOM_COLORS would.
+const ELEMENT_NAMES: Record<string, string> = {
+  H: "Hydrogen", C: "Carbon", N: "Nitrogen", O: "Oxygen", S: "Sulfur",
+  F: "Fluorine", Cl: "Chlorine", Br: "Bromine", I: "Iodine", P: "Phosphorus",
+  Cu: "Copper", Zn: "Zinc", Fe: "Iron", Co: "Cobalt", Ni: "Nickel",
+  Mn: "Manganese", Pd: "Palladium", Pt: "Platinum", Ag: "Silver", Au: "Gold",
+  Cd: "Cadmium", Cr: "Chromium", Ti: "Titanium", Zr: "Zirconium", In: "Indium",
+  Al: "Aluminum", Li: "Lithium", Na: "Sodium", K: "Potassium", Rb: "Rubidium",
+  Cs: "Cesium", Mg: "Magnesium", Ca: "Calcium", Sr: "Strontium", Ba: "Barium",
+  Y: "Yttrium", La: "Lanthanum",
+};
+
 const SkulptDisplay: React.FC<SkulptDisplayProps> = ({ code }) => {
   const outputRef = useRef<HTMLPreElement>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
@@ -95,6 +109,7 @@ const SkulptDisplay: React.FC<SkulptDisplayProps> = ({ code }) => {
   const [outputText, setOutputText] = useState<string>("");
   const [skulptLoaded, setSkulptLoaded] = useState(false);
   const [running, setRunning] = useState(false);
+  const [legendEntries, setLegendEntries] = useState<{ symbol: string; color: string }[]>([]);
 
   // Auto-run whenever the parent pushes new code down
   const prevCodeRef = React.useRef<string>("");
@@ -103,6 +118,31 @@ const SkulptDisplay: React.FC<SkulptDisplayProps> = ({ code }) => {
       prevCodeRef.current = code;
       runCode();
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [code, skulptLoaded]);
+
+  // Re-fit and redraw (debounced) when the window/container is resized,
+  // so a structure drawn on a wide window doesn't stay oversized (or
+  // undersized) after the user resizes their browser.
+  const resizeTimeoutRef = React.useRef<number | null>(null);
+  React.useEffect(() => {
+    const handleResize = () => {
+      if (resizeTimeoutRef.current !== null) {
+        window.clearTimeout(resizeTimeoutRef.current);
+      }
+      resizeTimeoutRef.current = window.setTimeout(() => {
+        if (skulptLoaded && code.trim()) {
+          runCode();
+        }
+      }, 400);
+    };
+    window.addEventListener("resize", handleResize);
+    return () => {
+      window.removeEventListener("resize", handleResize);
+      if (resizeTimeoutRef.current !== null) {
+        window.clearTimeout(resizeTimeoutRef.current);
+      }
+    };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [code, skulptLoaded]);
 
@@ -173,7 +213,36 @@ const builtinRead = (filename: string): string => {
 };
 
   const outf = (text: string) => {
-    setOutputText((prev) => prev + text);
+    const marker = "@@LEGEND@@";
+    const idx = text.indexOf(marker);
+    if (idx === -1) {
+      setOutputText((prev) => prev + text);
+      return;
+    }
+
+    // mof_renderer.py prints one line like "@@LEGEND@@Zn:#7799AA;C:#404040"
+    // before drawing starts. Pull that out for the color-key panel instead
+    // of showing it as raw output text.
+    const before = text.slice(0, idx);
+    const afterMarker = text.slice(idx + marker.length);
+    const newlineIdx = afterMarker.indexOf("\n");
+    const payload = newlineIdx === -1 ? afterMarker : afterMarker.slice(0, newlineIdx);
+    const rest = newlineIdx === -1 ? "" : afterMarker.slice(newlineIdx + 1);
+
+    const entries = payload
+      .split(";")
+      .filter(Boolean)
+      .map((pair) => {
+        const [symbol, color] = pair.split(":");
+        return { symbol, color };
+      })
+      .filter((e) => e.symbol && e.color);
+    setLegendEntries(entries);
+
+    const visible = before + rest;
+    if (visible) {
+      setOutputText((prev) => prev + visible);
+    }
   };
 
   const runCode = () => {
@@ -188,6 +257,7 @@ const builtinRead = (filename: string): string => {
 
     setRunning(true);
     setOutputText("");
+    setLegendEntries([]);
     if (canvasRef.current) {
       canvasRef.current.innerHTML = "";
     }
@@ -195,8 +265,8 @@ const builtinRead = (filename: string): string => {
     // Small delay so the cleared canvas div is in the DOM before Skulpt
     // measures its dimensions.
     setTimeout(() => {
-      const width = canvasRef.current?.clientWidth ?? 700;
-      const height = canvasRef.current?.clientHeight ?? 500;
+      const width = canvasRef.current?.clientWidth ?? 950;
+      const height = canvasRef.current?.clientHeight ?? 620;
 
       window.Sk.configure({
         output: outf,
@@ -218,40 +288,36 @@ const builtinRead = (filename: string): string => {
         // engine to center the coordinate context (0,0) exactly in the container midpoints.
       };
 
+      // mof_renderer.py's auto-fit logic (MIN/MAX_CANVAS_WIDTH/HEIGHT) is
+      // otherwise a set of fixed Python constants with no idea how much
+      // room the current browser window actually has. Overriding them
+      // here — right before the generated drawing code runs — makes the
+      // structure size/scale itself against the real, current container
+      // size instead of a generic desktop-sized default. `min`/`max`
+      // guard against a window narrower/shorter than the module's normal
+      // minimum, so the fit floor never exceeds what's actually available.
+      const sizingPreamble =
+        `import mof_renderer\n` +
+        `mof_renderer.MIN_CANVAS_WIDTH = min(420.0, ${width})\n` +
+        `mof_renderer.MAX_CANVAS_WIDTH = max(${width}, 420.0)\n` +
+        `mof_renderer.MIN_CANVAS_HEIGHT = min(360.0, ${height})\n` +
+        `mof_renderer.MAX_CANVAS_HEIGHT = max(${height}, 360.0)\n`;
+      const codeToRun = sizingPreamble + code;
+
       window.Sk.misceval
         .asyncToPromise(() =>
-          window.Sk.importMainWithBody("<stdin>", false, code, true)
+          window.Sk.importMainWithBody("<stdin>", false, codeToRun, true)
         )
-        .then(
-          () => {
-            setRunning(false);
-          },
-          (err: any) => {
-            setRunning(false);
-            
-            // 1. Expose the raw error to the window so you can read it via the browser console
-            window.lastSkulptError = err;
-
-            // 2. Safely extract the comprehensive Python traceback string
-            let errorMessage = "Unknown error";
-            if (err && typeof err.toString === "function") {
-              errorMessage = err.toString();
-            } else if (typeof err === "string") {
-              errorMessage = err;
-            }
-
-            console.error("Python Execution Crash Details:", errorMessage);
-
-            // 3. Print the raw Python exception message clearly on your screen
-            setOutputText(
-              (prev) =>
-                prev +
-                "<br><strong style='color:red'>Python Runtime Error:</strong><br><pre style='color:#cc0000; background:#fff0f0; padding:8px; border:1px solid #ffcccc; margin-top:4px;'>" +
-                errorMessage +
-                "</pre>"
-            );
-          }
-        );
+        .then(() => {
+          console.log("Success");
+          })
+        .catch((err: any) => {
+           // This logs the full internal Skulpt error to your Browser Developer Tools
+          console.error("SKULPT FATAL ERROR:", err);
+          console.error("DEBUG - Last few lines of code executed:", code.split('\n').slice(-10));
+          // Alert the user with the specific error type
+          alert(`Python Error: ${err.toString()}`);
+        });
     }, 100);
   };
 
@@ -275,14 +341,51 @@ const builtinRead = (filename: string): string => {
       <div
         ref={canvasRef}
         style={{
-          minHeight: 400,
-          maxHeight: 600,
+          minHeight: 380,
+          maxHeight: 640,
           border: "1px solid #ddd",
           borderRadius: 4,
           backgroundColor: "white",
           width: "100%",
+          overflow: "auto",
         }}
       />
+
+      {legendEntries.length > 0 && (
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            gap: "6px 16px",
+            marginTop: 10,
+            padding: "8px 12px",
+            border: "1px solid #eee",
+            borderRadius: 4,
+            backgroundColor: "#fafafa",
+            fontSize: 12,
+          }}
+        >
+          {legendEntries.map(({ symbol, color }) => (
+            <div key={symbol} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span
+                style={{
+                  display: "inline-block",
+                  width: 12,
+                  height: 12,
+                  borderRadius: "50%",
+                  backgroundColor: color,
+                  border: "1px solid rgba(0,0,0,0.2)",
+                  flexShrink: 0,
+                }}
+              />
+              <span>
+                {symbol}
+                {ELEMENT_NAMES[symbol] ? ` — ${ELEMENT_NAMES[symbol]}` : ""}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
 
       {outputText.trim() !== "" && (
         <pre

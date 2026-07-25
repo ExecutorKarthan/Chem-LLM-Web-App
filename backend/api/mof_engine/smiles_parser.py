@@ -138,7 +138,8 @@ class SmilesParser:
     def handle_bracket(self, text):
         """Processes complex bracket-enclosed species like isolated metal nodes or multi-atom ions."""
         symbol, charge = self.parse_bracket(text)
-        atom = Atom(symbol, charge=charge, aromatic=False, raw=text)
+        aromatic = symbol in self.AROMATIC
+        atom = Atom(symbol, charge=charge, aromatic=aromatic, raw=text)
         atom = self.mol.add_atom(atom)
 
         # Automatically connect to the preceding neighbor atom if connectivity context exists

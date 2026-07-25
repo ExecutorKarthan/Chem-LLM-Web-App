@@ -23,78 +23,12 @@ import re
 
 from smiles_parser import SmilesParser
 from layout_engine import LayoutEngine
+from ring_utils import RingFinder
 from turtle_renderer import (
     ATOM_COLORS, BASE_RADII, DEFAULT_ATOM_COLOR,
     LABEL_Y_FRACTION, LABEL_FONT_SCALE, LABEL_MIN_RADIUS
 )
 # MOF_DB is imported further down, right where it's used/documented.
-
-# ─────────────────────────────────────────────────────────────────────────────
-# ION RADII TABLE
-# Format: symbol -> (ionic_radius_A, hydrated_radius_A, verification)
-# ─────────────────────────────────────────────────────────────────────────────
-ION_RADII = {
-    "Li+":  (0.76,  3.40, "Experimentally Verified"),
-    "Na+":  (1.02,  3.58, "Experimentally Verified"),
-    "K+":   (1.38,  3.31, "Experimentally Verified"),
-    "Rb+":  (1.52,  3.29, "Experimentally Verified"),
-    "Cs+":  (1.67,  3.29, "Experimentally Verified"),
-    "Be2+": (0.45,  4.59, "Estimated / Unverified"),
-    "Mg2+": (0.72,  4.28, "Experimentally Verified"),
-    "Ca2+": (1.00,  4.12, "Experimentally Verified"),
-    "Sr2+": (1.18,  4.12, "Experimentally Verified"),
-    "Ba2+": (1.35,  4.04, "Experimentally Verified"),
-    "Cu+":  (0.77,  3.20, "Estimated / Unverified"),
-    "V2+":  (0.79,  4.30, "Estimated / Unverified"),
-    "Cr2+": (0.73,  4.25, "Estimated / Unverified"),
-    "Mn2+": (0.67,  4.38, "Experimentally Verified"),
-    "Fe2+": (0.61,  4.28, "Experimentally Verified"),
-    "Co2+": (0.65,  4.23, "Experimentally Verified"),
-    "Ni2+": (0.69,  4.04, "Experimentally Verified"),
-    "Cu2+": (0.73,  4.19, "Experimentally Verified"),
-    "Zn2+": (0.74,  4.30, "Experimentally Verified"),
-    "Ti2+": (0.86,  4.35, "Estimated / Unverified"),
-    "Sn2+": (1.12,  3.95, "Estimated / Unverified"),
-    "Pb2+": (1.19,  4.01, "Estimated / Unverified"),
-    "Ti3+": (0.67,  4.65, "Estimated / Unverified"),
-    "V3+":  (0.64,  4.60, "Estimated / Unverified"),
-    "Cr3+": (0.62,  4.61, "Estimated / Unverified"),
-    "Mn3+": (0.58,  4.60, "Estimated / Unverified"),
-    "Fe3+": (0.55,  4.57, "Experimentally Verified"),
-    "Co3+": (0.55,  4.55, "Estimated / Unverified"),
-    "Ti4+": (0.61,  4.70, "Estimated / Unverified"),
-    "V4+":  (0.58,  4.70, "Estimated / Unverified"),
-    "Mn4+": (0.53,  4.75, "Estimated / Unverified"),
-    "V5+":  (0.54,  4.80, "Estimated / Unverified"),
-    "Cr6+": (0.44,  4.90, "Estimated / Unverified"),
-    "Mn7+": (0.46,  4.90, "Estimated / Unverified"),
-    "Al3+": (0.54,  4.75, "Experimentally Verified"),
-    "Ga3+": (0.62,  4.65, "Estimated / Unverified"),
-    "In3+": (0.80,  4.63, "Estimated / Unverified"),
-    "Sn4+": (0.69,  4.65, "Estimated / Unverified"),
-    "Pb4+": (0.78,  4.60, "Estimated / Unverified"),
-    "Sc3+": (0.75,  4.50, "Experimentally Verified"),
-    "Y3+":  (0.90,  4.40, "Experimentally Verified"),
-    "La3+": (1.03,  4.52, "Experimentally Verified"),
-    "Ce3+": (1.01,  4.51, "Estimated / Unverified"),
-    "Ce4+": (0.87,  4.65, "Estimated / Unverified"),
-    "Nd3+": (0.98,  4.48, "Estimated / Unverified"),
-    "Gd3+": (0.94,  4.45, "Estimated / Unverified"),
-    "Lu3+": (0.86,  4.39, "Estimated / Unverified"),
-    "U3+":  (1.03,  4.73, "Estimated / Unverified"),
-    "U4+":  (0.89,  4.83, "Estimated / Unverified"),
-    "U6+":  (0.73,  4.85, "Estimated / Unverified"),
-    "Np3+": (1.01,  4.72, "Estimated / Unverified"),
-    "Np4+": (0.87,  4.84, "Estimated / Unverified"),
-    "Pu3+": (1.00,  4.71, "Estimated / Unverified"),
-    "Pu4+": (0.86,  4.82, "Estimated / Unverified"),
-    "Am3+": (0.98,  4.70, "Estimated / Unverified"),
-    "Am4+": (0.85,  4.80, "Estimated / Unverified"),
-    "Ac3+": (1.12,  4.75, "Estimated / Unverified"),
-    "Th4+": (0.94,  4.87, "Estimated / Unverified"),
-    "Pa4+": (0.90,  4.85, "Estimated / Unverified"),
-    "Pa5+": (0.78,  4.90, "Estimated / Unverified"),
-}
 
 # ─────────────────────────────────────────────────────────────────────────────
 # TUNING CONSTANTS  — adjust these to change the look
@@ -128,11 +62,44 @@ GUEST_DISPLAY_SCALE = 0.60
 # Minimum on-screen radius (px) for the bare guest ion ball.
 GUEST_MIN_DISPLAY_PX = 9
 
+# Fixed angstrom-to-pixel reference for guest ion / hydration shell sizing
+# at mol_scale == 1, tied to the SAME per-atom scale factor as everything
+# else (self._mol_scale) rather than to this linker's own drawn square
+# size (_pore_r_px / _pore_fit_ang). The old approach derived px-per-Å
+# from how big THIS linker's schematic happened to be drawn, so a large
+# multi-armed linker (bigger square panel) made the exact same real ion
+# radius balloon to 1.5x+ the size it'd draw at for a small linker, with
+# nothing about the ion itself having changed. Calibrated so a typical
+# small linker at scale=1.0 draws the same size hydration shell as before.
+GUEST_PX_PER_ANGSTROM = 54.0
+
+# Hydration shell fill/outline colors — single source of truth shared by
+# _draw_guest_ion (the actual drawing) and get_legend_entries (the key),
+# so the legend swatch can never fall out of sync with what's on screen.
+HYDRATION_SHELL_COLOR = "#4A90D9"
+HYDRATION_SHELL_OUTLINE = "#2A6099"
+
 # Extra horizontal breathing room between the square-SBU panel and the cube panel.
 PANEL_GAP_PX = 70
 
 # How far back the cabinet-projection back face sits.
 DEPTH_STRUT_FACTOR = 1.55
+
+# ── Canvas auto-fit ──────────────────────────────────────────────────────
+# The square SBU panel and the cube panel are drawn side by side, and their
+# combined width scales directly with the linker's own (now geometrically
+# correct, post-layout-fix) bounding box - a big multi-ring linker is
+# legitimately bigger on screen than a small one. Rather than fixing one
+# canvas size and letting large structures run off-page, we size the
+# canvas to the structure (within a sensible min/max) and, only once a
+# structure is too big even for the max canvas, scale the whole drawing
+# down so it still fits. See MOFRenderer._auto_fit() / _footprint_at_scale().
+MIN_CANVAS_WIDTH  = 520.0
+MIN_CANVAS_HEIGHT = 380.0
+MAX_CANVAS_WIDTH  = 950.0
+MAX_CANVAS_HEIGHT = 620.0
+CANVAS_MARGIN_PX  = 50.0   # breathing room added around the measured footprint
+MIN_AUTO_SCALE    = 0.35   # never shrink a structure below this fraction
 
 # ─────────────────────────────────────────────────────────────────────────────
 # DERIVED — do not edit these
@@ -199,51 +166,69 @@ def _lookup_mof(linker_smiles, metal):
 class MOFRenderer:
 
     def __init__(self, turtle_obj, metal, linker_smiles,
-                 cx=0, cy=0, scale=1.0, metal_charge=0, guest_ion=None):
+             cx=0, cy=0, scale=1.0, metal_charge=0, guest_ion=None, guest_ion_metadata = None, mof_id=None):
         self.t            = turtle_obj
         self.metal        = metal
         self.metal_charge = metal_charge
         self.linker_smiles = linker_smiles
         self.cx           = cx
         self.cy           = cy
-        self.scale        = scale
         self.guest_ion    = guest_ion
 
-        # ── Step 1: parse and layout linker ──────────────────────────────
+        if mof_id and mof_id in MOF_DB:
+            self.data = MOF_DB[mof_id]
+        else:
+            self.data = self._fuzzy_lookup(metal, linker_smiles)
+
+        # ── Step 1: parse and layout linker (scale-independent) ───────────
         render_smiles = _select_linker_fragment(linker_smiles)
         self.linker_mol = SmilesParser(render_smiles).parse()
         LayoutEngine(self.linker_mol).layout()
         self._center_linker()
 
-        self._mol_scale = LINKER_ATOM_SCALE * scale
+        # Rings where every member atom is aromatic get a delocalized-pi
+        # circle drawn inside them at render time, instead of (or in
+        # addition to) explicit double bonds — see _draw_aromatic_circles.
+        self._aromatic_rings = [
+            ring for ring in RingFinder(self.linker_mol).find_rings()
+            if ring and all(getattr(a, 'aromatic', False) for a in ring)
+        ]
 
-        # Linker natural half-width with defensive fallback if parsing yields 0 atoms
         xs = [a.x for a in self.linker_mol.atoms]
         ys = [a.y for a in self.linker_mol.atoms]
-        
         if not xs or not ys:
-            xs = [0.0]
-            ys = [0.0]
-            
-        atom_pad = max(BASE_RADII.values()) * self._mol_scale
-        self._linker_half_w = (max(xs) - min(xs)) / 2 * self._mol_scale + atom_pad
-        self._linker_half_h = (max(ys) - min(ys)) / 2 * self._mol_scale + atom_pad
+            xs, ys = [0.0], [0.0]
+        self._linker_raw_w = max(xs) - min(xs)
+        self._linker_raw_h = max(ys) - min(ys)
 
-        # ── Step 2: metal radius ─────────────────────────────────────────
+        # ── Step 2: auto-fit — decide how much to scale the whole drawing
+        # and what canvas size to request, based on how big this specific
+        # linker's real geometry is. ───────────────────────────────────────
+        self.scale, self.canvas_width, self.canvas_height = self._auto_fit(scale, metal)
+
+        # ── Step 3: everything below derives from the FINAL, auto-fit
+        # scale — mol_scale, metal radius, square side. ───────────────────
+        self._mol_scale = LINKER_ATOM_SCALE * self.scale
+        atom_pad = max(BASE_RADII.values()) * self._mol_scale
+        self._linker_half_w = self._linker_raw_w / 2 * self._mol_scale + atom_pad
+        self._linker_half_h = self._linker_raw_h / 2 * self._mol_scale + atom_pad
+
         self.metal_r = max(BASE_RADII.get(metal, 28) * self._mol_scale * 2.2,
-                           14 * scale)
+                           14 * self.scale)
         self.metal_fill, self.metal_text = ATOM_COLORS.get(metal, DEFAULT_ATOM_COLOR)
 
-        # ── Step 3: square side ──────────────────────────────────────────
         self._sq_size = self._linker_half_w * 2 + 2 * self.metal_r
 
         # ── Step 4: pore data ────────────────────────────────────────────
-        db_result = _lookup_mof(linker_smiles, metal)
-        if db_result:
-            self._lcd_ang, self._pld_ang = db_result
+        if mof_id and mof_id in MOF_DB:
+            self._lcd_ang, self._pld_ang, _ = MOF_DB[mof_id] 
         else:
-            self._lcd_ang = MOF_PORE_DIAMETER_FALLBACK
-            self._pld_ang = MOF_PORE_DIAMETER_FALLBACK * 0.75
+            db_result = _lookup_mof(linker_smiles, metal)
+            if db_result:
+                self._lcd_ang, self._pld_ang = db_result
+            else:
+                self._lcd_ang = MOF_PORE_DIAMETER_FALLBACK
+                self._pld_ang = MOF_PORE_DIAMETER_FALLBACK * 0.75
 
         self._pore_fit_ang = self._pld_ang / 2
         self._pore_r_ang   = self._lcd_ang / 2
@@ -254,9 +239,58 @@ class MOFRenderer:
         self._guest_hydrated_ang = None
         self._guest_verified     = None
         if guest_ion:
-            entry = ION_RADII.get(guest_ion)
-            if entry:
-                self._guest_ionic_ang, self._guest_hydrated_ang, self._guest_verified = entry
+            self._guest_ionic_ang = guest_ion_metadata[0]
+            self._guest_hydrated_ang = guest_ion_metadata[1]
+            self._guest_verified = guest_ion_metadata[2]
+
+    # ── Canvas auto-fit ──────────────────────────────────────────────────
+
+    def _footprint_at_scale(self, scale, metal):
+        """
+        Re-derives just the sizes needed to estimate the total on-screen
+        footprint (square SBU panel + cube panel, side by side) at a given
+        scale, without touching self or the turtle. Mirrors the same
+        formulas _render()/_draw_cube() use for panel placement.
+        """
+        mol_scale = LINKER_ATOM_SCALE * scale
+        atom_pad = max(BASE_RADII.values()) * mol_scale
+        linker_half_w = self._linker_raw_w / 2 * mol_scale + atom_pad
+        linker_half_h = self._linker_raw_h / 2 * mol_scale + atom_pad
+        metal_r = max(BASE_RADII.get(metal, 28) * mol_scale * 2.2, 14 * scale)
+        sq_size = linker_half_w * 2 + 2 * metal_r
+
+        panel_half_w = sq_size / 2 + metal_r + linker_half_h
+        gap = max(sq_size * 0.45, PANEL_GAP_PX * scale)
+
+        total_width = 4 * panel_half_w + gap
+        depth_dy = sq_size * 0.28 * DEPTH_STRUT_FACTOR
+        total_height = sq_size + 2 * metal_r + depth_dy + 40  # label/margin allowance
+
+        return total_width, total_height
+
+    def _auto_fit(self, requested_scale, metal):
+        """
+        Returns (final_scale, canvas_width, canvas_height). Small
+        structures get a canvas sized to fit them (within a sensible
+        min/max) at their requested scale unchanged. Structures too big
+        even for the max canvas get scaled down (never below
+        MIN_AUTO_SCALE) so they still fit rather than running off-page.
+        """
+        natural_w, natural_h = self._footprint_at_scale(requested_scale, metal)
+        padded_w = natural_w + CANVAS_MARGIN_PX
+        padded_h = natural_h + CANVAS_MARGIN_PX
+
+        if padded_w <= MAX_CANVAS_WIDTH and padded_h <= MAX_CANVAS_HEIGHT:
+            canvas_w = max(MIN_CANVAS_WIDTH, padded_w)
+            canvas_h = max(MIN_CANVAS_HEIGHT, padded_h)
+            return requested_scale, canvas_w, canvas_h
+
+        fit = min(
+            (MAX_CANVAS_WIDTH - CANVAS_MARGIN_PX) / natural_w,
+            (MAX_CANVAS_HEIGHT - CANVAS_MARGIN_PX) / natural_h,
+        )
+        fit = max(fit, MIN_AUTO_SCALE)
+        return requested_scale * fit, MAX_CANVAS_WIDTH, MAX_CANVAS_HEIGHT
 
     def _center_linker(self):
         atoms = self.linker_mol.atoms
@@ -525,6 +559,8 @@ class MOFRenderer:
             else:
                 self._line(sx1, sy1, sx2, sy2)
 
+        self._draw_aromatic_circles(mx, my, angle, mol_scale, alpha)
+
         self.t.pensize(1)
         for atom in self.linker_mol.atoms:
             ax, ay = self._transform(atom.x, atom.y, mx, my, angle, mol_scale)
@@ -537,6 +573,41 @@ class MOFRenderer:
                 fs = self._fit_font(atom.symbol, r)
                 if fs >= 5:
                     self._write_centered(ax, ay, atom.symbol, self._contrast_text_color(fill), fs)
+
+    def _draw_aromatic_circles(self, mx, my, angle, mol_scale, alpha):
+        """
+        Draws an inscribed circle inside every ring where all member atoms
+        are aromatic — the standard delocalized-pi-electron depiction.
+
+        This is used instead of alternating single/double (Kekulé) bonds
+        because assigning a specific Kekulé structure correctly requires
+        solving a matching problem over the ring system, and getting it
+        wrong would show a chemically misleading structure. The circle is
+        unambiguous and correct regardless of substitution pattern or
+        ring fusion, at the cost of not distinguishing bond orders within
+        the ring visually.
+        """
+        if not self._aromatic_rings:
+            return
+
+        t = self.t
+        color = self._dim_color("#707070", alpha) if alpha < 1.0 else "#707070"
+
+        for ring in self._aromatic_rings:
+            cx = sum(a.x for a in ring) / len(ring)
+            cy = sum(a.y for a in ring) / len(ring)
+            avg_r = sum(math.hypot(a.x - cx, a.y - cy) for a in ring) / len(ring)
+            circle_r = avg_r * 0.62 * mol_scale
+            if circle_r < 2:
+                continue
+
+            px, py = self._transform(cx, cy, mx, my, angle, mol_scale)
+            t.penup(); t.goto(px, py - circle_r); t.pendown()
+            t.pencolor(color)
+            t.pensize(max(1, 1.5 * mol_scale * alpha))
+            t.circle(circle_r)
+            t.penup()
+        t.pensize(1)
 
     def _transform(self, lx, ly, mx, my, angle, mol_scale):
         sx, sy = lx * mol_scale, ly * mol_scale
@@ -573,10 +644,10 @@ class MOFRenderer:
         hydrated_ang = self._guest_hydrated_ang
         effective_ang = hydrated_ang if hydrated_ang is not None else ionic_ang
 
-        px_per_ang_pore  = self._pore_r_px / max(self._pore_fit_ang, 0.001)
+        px_per_ang       = GUEST_PX_PER_ANGSTROM * self._mol_scale
         hydrated_ang_eff = hydrated_ang if hydrated_ang else ionic_ang
-        true_hyd_px      = hydrated_ang_eff * px_per_ang_pore
-        true_ion_px      = ionic_ang        * px_per_ang_pore
+        true_hyd_px      = hydrated_ang_eff * px_per_ang
+        true_ion_px      = ionic_ang        * px_per_ang
 
         if effective_ang > self._pore_fit_ang:
             display_hydrated = true_hyd_px * 1.4
@@ -591,13 +662,6 @@ class MOFRenderer:
             if display_hydrated > 0:
                 display_hydrated += grow
 
-        if effective_ang <= self._pore_fit_ang * 0.80:
-            fit_color = "#3FB950"
-        elif effective_ang <= self._pore_fit_ang:
-            fit_color = "#D29922"
-        else:
-            fit_color = "#F85149"
-
         element_symbol = re.match(r"[A-Za-z]+", self.guest_ion or "")
         element_symbol = element_symbol.group(0) if element_symbol else ""
         ion_fill, _ = ATOM_COLORS.get(element_symbol, DEFAULT_ATOM_COLOR)
@@ -607,14 +671,14 @@ class MOFRenderer:
         if hydrated_ang is not None and display_hydrated > display_ion + 2:
             t.penup(); t.goto(center_x, center_y - display_hydrated)
             t.pendown()
-            t.pencolor("#2A6099"); t.pensize(1)
-            t.fillcolor("#4A90D9")
+            t.pencolor(HYDRATION_SHELL_OUTLINE); t.pensize(1)
+            t.fillcolor(HYDRATION_SHELL_COLOR)
             t.begin_fill(); t.circle(display_hydrated); t.end_fill()
             t.penup()
 
         t.penup(); t.goto(center_x, center_y - display_ion)
         t.pendown()
-        t.pencolor(fit_color); t.pensize(3)
+        t.pencolor("#555555"); t.pensize(1)
         t.fillcolor(ion_fill)
         t.begin_fill(); t.circle(display_ion); t.end_fill()
         t.penup()
@@ -649,7 +713,7 @@ class MOFRenderer:
             if ionic_ang is not None:
                 lines.append((f"Guest ion radius (bare): {ionic_ang:.2f} \u00c5", "#8B949E"))
             if hydrated_ang is not None:
-                lines.append((f"Guest ion radius (hydrated): {hydrated_ang:.2f} \u00c5  vs. PLD bottleneck {self._pore_fit_ang:.2f} \u00c5", "#4A90D9"))
+                lines.append((f"Guest ion radius (hydrated): {hydrated_ang:.2f} \u00c5  vs. PLD bottleneck {self._pore_fit_ang:.2f} \u00c5", HYDRATION_SHELL_COLOR))
             src_note = "Exp. verified" if "Experimental" in verified else "Est./unverified"
             lines.append((f"* {src_note} ion radii; pore from MOF_data.csv", "#6E7681"))
 
@@ -703,6 +767,50 @@ class MOFRenderer:
         fs   = int(min(side/0.72, side/(0.65*max(n,1))) * LABEL_FONT_SCALE)
         return max(fs, 0)
 
+    def get_legend_entries(self):
+        """
+        Returns an ordered list of (symbol, fill_hex) for every distinct
+        element actually present in this specific render — the linker's
+        own atoms, the metal node, and the guest ion (if any) — deduping
+        aromatic lowercase symbols (e.g. 'c') with their element ('C')
+        since they share the same color. Metal first, then linker atoms
+        in the order they appear, then the guest ion.
+
+        Deliberately reads straight from ATOM_COLORS (the same table the
+        drawing itself uses) rather than a separate hardcoded list, so
+        the legend can't silently drift out of sync with what's drawn.
+        """
+        symbols = []
+        seen = set()
+
+        def add(sym):
+            if not sym:
+                return
+            canonical = sym.upper() if sym in SmilesParser.AROMATIC else sym
+            if canonical not in seen:
+                seen.add(canonical)
+                symbols.append(canonical)
+
+        add(self.metal)
+        for atom in self.linker_mol.atoms:
+            add(atom.symbol)
+        if self.guest_ion:
+            m = re.match(r"[A-Za-z]+", self.guest_ion)
+            if m:
+                add(m.group(0))
+
+        entries = []
+        for sym in symbols:
+            fill, _ = ATOM_COLORS.get(sym, DEFAULT_ATOM_COLOR)
+            entries.append((sym, fill))
+
+        # Matches the fill color _draw_guest_ion uses for the hydration
+        # shell — kept as one literal here and referenced there too, so
+        # if that color ever changes it only needs updating in one place.
+        if self.guest_ion and self._guest_hydrated_ang is not None:
+            entries.append(("Hydration Shell", HYDRATION_SHELL_COLOR))
+        return entries
+
     @staticmethod
     def _contrast_text_color(fill_hex):
         h = fill_hex.lstrip("#")
@@ -724,13 +832,25 @@ class MOFRenderer:
 # SKULPT COMPATIBILITY LAYER / BRIDGE
 # ─────────────────────────────────────────────────────────────────────────────
 
-def draw_lattice(metal, linker_smiles, guest_ion=None, simple_mode=False):
+def draw_lattice(metal, linker_smiles, mof_id=None, guest_ion=None, guest_ion_metadata = None, simple_mode=False):
     """
     Top-level wrapper function called by the UI Skulpt template string.
     Instantiates a Skulpt canvas turtle and maps parameters to the MOFRenderer object.
     """
     import turtle
-    
+
+    screen = turtle.Screen()
+    # `speed(0)` below only skips the per-move animation delay — the
+    # screen still repaints the canvas after every individual drawing
+    # command by default (tracer defaults to on). A full cube has ~16
+    # linker instances worth of atoms/bonds/labels plus metal balls and
+    # the guest ion, so that's thousands of incremental repaints. Turning
+    # tracer off batches everything into one paint at the end instead.
+    try:
+        screen.tracer(0, 0)
+    except Exception:
+        pass
+
     t = turtle.Turtle()
     t.speed(0)
     t.hideturtle()
@@ -744,20 +864,59 @@ def draw_lattice(metal, linker_smiles, guest_ion=None, simple_mode=False):
     
     renderer = MOFRenderer(
         turtle_obj=t,
-        metal=str(metal).strip() if metal is not None else "",
-        linker_smiles=str(linker_smiles).strip() if linker_smiles is not None else "",
-        guest_ion=str(guest_ion).strip() if (guest_ion and str(guest_ion).strip() and str(guest_ion).lower() != "none") else None
+        metal=str(metal).strip() if metal else "",
+        linker_smiles=str(linker_smiles).strip() if linker_smiles else "",
+        mof_id=mof_id, 
+        guest_ion=guest_ion if guest_ion else None,
+        guest_ion_metadata=guest_ion_metadata if guest_ion_metadata else None
     )
-    
+
+    # Best-effort: size the actual canvas to match what this structure
+    # needs (renderer.canvas_width/height, computed in __init__). If
+    # Skulpt's turtle module doesn't support a runtime Screen resize this
+    # just silently no-ops — renderer.scale was already chosen so the
+    # drawing fits within whatever canvas size the page gave it.
+    try:
+        screen.setup(renderer.canvas_width, renderer.canvas_height)
+    except Exception:
+        pass
+
     has_guest = renderer.guest_ion is not None
-    
-    if is_simple:
-        if has_guest:
-            renderer.draw_simple_with_guest()
+
+    # Emit a structured legend line for the UI to parse (see
+    # SkulptDisplay.tsx's outf handler) — built from the same
+    # ATOM_COLORS table the drawing itself uses, so it can't drift out
+    # of sync with what's actually on the canvas. Printed before drawing
+    # so it's still available even if the draw itself fails partway.
+    legend = renderer.get_legend_entries()
+    print("@@LEGEND@@" + ";".join(f"{sym}:{color}" for sym, color in legend))
+
+    try:
+        if is_simple:
+            if has_guest:
+                renderer.draw_simple_with_guest()
+            else:
+                renderer.draw_simple_without_guest()
         else:
-            renderer.draw_simple_without_guest()
-    else:
-        if has_guest:
-            renderer.draw_with_guest()
-        else:
-            renderer.draw_without_guest()
+            if has_guest:
+                renderer.draw_with_guest()
+            else:
+                renderer.draw_without_guest()
+    finally:
+        # Re-assert the hidden state immediately before the final flush.
+        # `t.hideturtle()` was already called right after creating `t`,
+        # but with tracer(0)/update() batching everything into one final
+        # repaint, the turtle cursor icon has been showing up at its last
+        # position in that repaint — re-asserting it right here, as the
+        # very last thing before the flush, is the reliable fix.
+        try:
+            t.hideturtle()
+        except Exception:
+            pass
+        # Flush the whole drawing to the canvas in one paint. In a
+        # `finally` so a partial/failed draw still shows whatever was
+        # completed instead of leaving a blank canvas.
+        try:
+            screen.update()
+        except Exception:
+            pass
