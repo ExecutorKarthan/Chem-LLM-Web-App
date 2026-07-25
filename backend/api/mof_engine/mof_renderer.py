@@ -67,6 +67,22 @@ PANEL_GAP_PX = 70
 # How far back the cabinet-projection back face sits.
 DEPTH_STRUT_FACTOR = 1.55
 
+# ── Canvas auto-fit ──────────────────────────────────────────────────────
+# The square SBU panel and the cube panel are drawn side by side, and their
+# combined width scales directly with the linker's own (now geometrically
+# correct, post-layout-fix) bounding box - a big multi-ring linker is
+# legitimately bigger on screen than a small one. Rather than fixing one
+# canvas size and letting large structures run off-page, we size the
+# canvas to the structure (within a sensible min/max) and, only once a
+# structure is too big even for the max canvas, scale the whole drawing
+# down so it still fits. See MOFRenderer._auto_fit() / _footprint_at_scale().
+MIN_CANVAS_WIDTH  = 520.0
+MIN_CANVAS_HEIGHT = 380.0
+MAX_CANVAS_WIDTH  = 950.0
+MAX_CANVAS_HEIGHT = 620.0
+CANVAS_MARGIN_PX  = 50.0   # breathing room added around the measured footprint
+MIN_AUTO_SCALE    = 0.35   # never shrink a structure below this fraction
+
 # ─────────────────────────────────────────────────────────────────────────────
 # DERIVED — do not edit these
 # ─────────────────────────────────────────────────────────────────────────────
@@ -135,50 +151,46 @@ class MOFRenderer:
              cx=0, cy=0, scale=1.0, metal_charge=0, guest_ion=None, guest_ion_metadata = None, mof_id=None):
         self.t            = turtle_obj
         self.metal        = metal
-        self.t            = turtle_obj
-        self.metal        = metal
         self.metal_charge = metal_charge
         self.linker_smiles = linker_smiles
         self.cx           = cx
         self.cy           = cy
-        self.scale        = scale
         self.guest_ion    = guest_ion
 
-        print(f"DEBUG: Renderer initialized. mof_id='{mof_id}'")
-
         if mof_id and mof_id in MOF_DB:
-            print("DEBUG: Using EXACT registry lookup.")
             self.data = MOF_DB[mof_id]
         else:
-            print("DEBUG: Using FUZZY fallback lookup.")
             self.data = self._fuzzy_lookup(metal, linker_smiles)
 
-        # ── Step 1: parse and layout linker ──────────────────────────────
+        # ── Step 1: parse and layout linker (scale-independent) ───────────
         render_smiles = _select_linker_fragment(linker_smiles)
         self.linker_mol = SmilesParser(render_smiles).parse()
         LayoutEngine(self.linker_mol).layout()
         self._center_linker()
 
-        self._mol_scale = LINKER_ATOM_SCALE * scale
-
-        # Linker natural half-width with defensive fallback if parsing yields 0 atoms
         xs = [a.x for a in self.linker_mol.atoms]
         ys = [a.y for a in self.linker_mol.atoms]
-        
         if not xs or not ys:
-            xs = [0.0]
-            ys = [0.0]
-            
-        atom_pad = max(BASE_RADII.values()) * self._mol_scale
-        self._linker_half_w = (max(xs) - min(xs)) / 2 * self._mol_scale + atom_pad
-        self._linker_half_h = (max(ys) - min(ys)) / 2 * self._mol_scale + atom_pad
+            xs, ys = [0.0], [0.0]
+        self._linker_raw_w = max(xs) - min(xs)
+        self._linker_raw_h = max(ys) - min(ys)
 
-        # ── Step 2: metal radius ─────────────────────────────────────────
+        # ── Step 2: auto-fit — decide how much to scale the whole drawing
+        # and what canvas size to request, based on how big this specific
+        # linker's real geometry is. ───────────────────────────────────────
+        self.scale, self.canvas_width, self.canvas_height = self._auto_fit(scale, metal)
+
+        # ── Step 3: everything below derives from the FINAL, auto-fit
+        # scale — mol_scale, metal radius, square side. ───────────────────
+        self._mol_scale = LINKER_ATOM_SCALE * self.scale
+        atom_pad = max(BASE_RADII.values()) * self._mol_scale
+        self._linker_half_w = self._linker_raw_w / 2 * self._mol_scale + atom_pad
+        self._linker_half_h = self._linker_raw_h / 2 * self._mol_scale + atom_pad
+
         self.metal_r = max(BASE_RADII.get(metal, 28) * self._mol_scale * 2.2,
-                           14 * scale)
+                           14 * self.scale)
         self.metal_fill, self.metal_text = ATOM_COLORS.get(metal, DEFAULT_ATOM_COLOR)
 
-        # ── Step 3: square side ──────────────────────────────────────────
         self._sq_size = self._linker_half_w * 2 + 2 * self.metal_r
 
         # ── Step 4: pore data ────────────────────────────────────────────
@@ -204,6 +216,55 @@ class MOFRenderer:
             self._guest_ionic_ang = guest_ion_metadata[0]
             self._guest_hydrated_ang = guest_ion_metadata[1]
             self._guest_verified = guest_ion_metadata[2]
+
+    # ── Canvas auto-fit ──────────────────────────────────────────────────
+
+    def _footprint_at_scale(self, scale, metal):
+        """
+        Re-derives just the sizes needed to estimate the total on-screen
+        footprint (square SBU panel + cube panel, side by side) at a given
+        scale, without touching self or the turtle. Mirrors the same
+        formulas _render()/_draw_cube() use for panel placement.
+        """
+        mol_scale = LINKER_ATOM_SCALE * scale
+        atom_pad = max(BASE_RADII.values()) * mol_scale
+        linker_half_w = self._linker_raw_w / 2 * mol_scale + atom_pad
+        linker_half_h = self._linker_raw_h / 2 * mol_scale + atom_pad
+        metal_r = max(BASE_RADII.get(metal, 28) * mol_scale * 2.2, 14 * scale)
+        sq_size = linker_half_w * 2 + 2 * metal_r
+
+        panel_half_w = sq_size / 2 + metal_r + linker_half_h
+        gap = max(sq_size * 0.45, PANEL_GAP_PX * scale)
+
+        total_width = 4 * panel_half_w + gap
+        depth_dy = sq_size * 0.28 * DEPTH_STRUT_FACTOR
+        total_height = sq_size + 2 * metal_r + depth_dy + 40  # label/margin allowance
+
+        return total_width, total_height
+
+    def _auto_fit(self, requested_scale, metal):
+        """
+        Returns (final_scale, canvas_width, canvas_height). Small
+        structures get a canvas sized to fit them (within a sensible
+        min/max) at their requested scale unchanged. Structures too big
+        even for the max canvas get scaled down (never below
+        MIN_AUTO_SCALE) so they still fit rather than running off-page.
+        """
+        natural_w, natural_h = self._footprint_at_scale(requested_scale, metal)
+        padded_w = natural_w + CANVAS_MARGIN_PX
+        padded_h = natural_h + CANVAS_MARGIN_PX
+
+        if padded_w <= MAX_CANVAS_WIDTH and padded_h <= MAX_CANVAS_HEIGHT:
+            canvas_w = max(MIN_CANVAS_WIDTH, padded_w)
+            canvas_h = max(MIN_CANVAS_HEIGHT, padded_h)
+            return requested_scale, canvas_w, canvas_h
+
+        fit = min(
+            (MAX_CANVAS_WIDTH - CANVAS_MARGIN_PX) / natural_w,
+            (MAX_CANVAS_HEIGHT - CANVAS_MARGIN_PX) / natural_h,
+        )
+        fit = max(fit, MIN_AUTO_SCALE)
+        return requested_scale * fit, MAX_CANVAS_WIDTH, MAX_CANVAS_HEIGHT
 
     def _center_linker(self):
         atoms = self.linker_mol.atoms
@@ -677,7 +738,19 @@ def draw_lattice(metal, linker_smiles, mof_id=None, guest_ion=None, guest_ion_me
     Instantiates a Skulpt canvas turtle and maps parameters to the MOFRenderer object.
     """
     import turtle
-    
+
+    screen = turtle.Screen()
+    # `speed(0)` below only skips the per-move animation delay — the
+    # screen still repaints the canvas after every individual drawing
+    # command by default (tracer defaults to on). A full cube has ~16
+    # linker instances worth of atoms/bonds/labels plus metal balls and
+    # the guest ion, so that's thousands of incremental repaints. Turning
+    # tracer off batches everything into one paint at the end instead.
+    try:
+        screen.tracer(0, 0)
+    except Exception:
+        pass
+
     t = turtle.Turtle()
     t.speed(0)
     t.hideturtle()
@@ -697,16 +770,35 @@ def draw_lattice(metal, linker_smiles, mof_id=None, guest_ion=None, guest_ion_me
         guest_ion=guest_ion if guest_ion else None,
         guest_ion_metadata=guest_ion_metadata if guest_ion_metadata else None
     )
-    
+
+    # Best-effort: size the actual canvas to match what this structure
+    # needs (renderer.canvas_width/height, computed in __init__). If
+    # Skulpt's turtle module doesn't support a runtime Screen resize this
+    # just silently no-ops — renderer.scale was already chosen so the
+    # drawing fits within whatever canvas size the page gave it.
+    try:
+        screen.setup(renderer.canvas_width, renderer.canvas_height)
+    except Exception:
+        pass
+
     has_guest = renderer.guest_ion is not None
     
-    if is_simple:
-        if has_guest:
-            renderer.draw_simple_with_guest()
+    try:
+        if is_simple:
+            if has_guest:
+                renderer.draw_simple_with_guest()
+            else:
+                renderer.draw_simple_without_guest()
         else:
-            renderer.draw_simple_without_guest()
-    else:
-        if has_guest:
-            renderer.draw_with_guest()
-        else:
-            renderer.draw_without_guest()
+            if has_guest:
+                renderer.draw_with_guest()
+            else:
+                renderer.draw_without_guest()
+    finally:
+        # Flush the whole drawing to the canvas in one paint. In a
+        # `finally` so a partial/failed draw still shows whatever was
+        # completed instead of leaving a blank canvas.
+        try:
+            screen.update()
+        except Exception:
+            pass

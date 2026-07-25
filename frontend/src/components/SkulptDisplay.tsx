@@ -106,6 +106,31 @@ const SkulptDisplay: React.FC<SkulptDisplayProps> = ({ code }) => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [code, skulptLoaded]);
 
+  // Re-fit and redraw (debounced) when the window/container is resized,
+  // so a structure drawn on a wide window doesn't stay oversized (or
+  // undersized) after the user resizes their browser.
+  const resizeTimeoutRef = React.useRef<number | null>(null);
+  React.useEffect(() => {
+    const handleResize = () => {
+      if (resizeTimeoutRef.current !== null) {
+        window.clearTimeout(resizeTimeoutRef.current);
+      }
+      resizeTimeoutRef.current = window.setTimeout(() => {
+        if (skulptLoaded && code.trim()) {
+          runCode();
+        }
+      }, 400);
+    };
+    window.addEventListener("resize", handleResize);
+    return () => {
+      window.removeEventListener("resize", handleResize);
+      if (resizeTimeoutRef.current !== null) {
+        window.clearTimeout(resizeTimeoutRef.current);
+      }
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [code, skulptLoaded]);
+
   // Load Skulpt from CDN once
   useEffect(() => {
     if (window.Sk) {
@@ -195,8 +220,8 @@ const builtinRead = (filename: string): string => {
     // Small delay so the cleared canvas div is in the DOM before Skulpt
     // measures its dimensions.
     setTimeout(() => {
-      const width = canvasRef.current?.clientWidth ?? 700;
-      const height = canvasRef.current?.clientHeight ?? 500;
+      const width = canvasRef.current?.clientWidth ?? 950;
+      const height = canvasRef.current?.clientHeight ?? 620;
 
       window.Sk.configure({
         output: outf,
@@ -218,9 +243,25 @@ const builtinRead = (filename: string): string => {
         // engine to center the coordinate context (0,0) exactly in the container midpoints.
       };
 
+      // mof_renderer.py's auto-fit logic (MIN/MAX_CANVAS_WIDTH/HEIGHT) is
+      // otherwise a set of fixed Python constants with no idea how much
+      // room the current browser window actually has. Overriding them
+      // here — right before the generated drawing code runs — makes the
+      // structure size/scale itself against the real, current container
+      // size instead of a generic desktop-sized default. `min`/`max`
+      // guard against a window narrower/shorter than the module's normal
+      // minimum, so the fit floor never exceeds what's actually available.
+      const sizingPreamble =
+        `import mof_renderer\n` +
+        `mof_renderer.MIN_CANVAS_WIDTH = min(420.0, ${width})\n` +
+        `mof_renderer.MAX_CANVAS_WIDTH = max(${width}, 420.0)\n` +
+        `mof_renderer.MIN_CANVAS_HEIGHT = min(360.0, ${height})\n` +
+        `mof_renderer.MAX_CANVAS_HEIGHT = max(${height}, 360.0)\n`;
+      const codeToRun = sizingPreamble + code;
+
       window.Sk.misceval
         .asyncToPromise(() =>
-          window.Sk.importMainWithBody("<stdin>", false, code, true)
+          window.Sk.importMainWithBody("<stdin>", false, codeToRun, true)
         )
         .then(() => {
           console.log("Success");
@@ -255,14 +296,34 @@ const builtinRead = (filename: string): string => {
       <div
         ref={canvasRef}
         style={{
-          minHeight: 400,
-          maxHeight: 600,
+          minHeight: 380,
+          maxHeight: 640,
           border: "1px solid #ddd",
           borderRadius: 4,
           backgroundColor: "white",
           width: "100%",
+          overflow: "auto",
         }}
       />
+
+      {outputText.trim() !== "" && (
+        <pre
+          ref={outputRef}
+          style={{
+            backgroundColor: "#f5f5f5",
+            padding: 10,
+            minHeight: 60,
+            maxHeight: 160,
+            overflowY: "auto",
+            whiteSpace: "pre-wrap",
+            marginTop: 10,
+            width: "100%",
+            boxSizing: "border-box",
+            fontSize: 12,
+          }}
+          dangerouslySetInnerHTML={{ __html: outputText }}
+        />
+      )}
     </div>
   );
 };
