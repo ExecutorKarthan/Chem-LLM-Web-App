@@ -88,6 +88,20 @@ const fetchMofEngineFileSync = (moduleName: string): string => {
   return xhr.responseText;
 };
 
+// Full element names for the legend labels — purely descriptive chemistry
+// facts (not derived from the renderer), so hardcoding this doesn't create
+// a drift risk the way duplicating ATOM_COLORS would.
+const ELEMENT_NAMES: Record<string, string> = {
+  H: "Hydrogen", C: "Carbon", N: "Nitrogen", O: "Oxygen", S: "Sulfur",
+  F: "Fluorine", Cl: "Chlorine", Br: "Bromine", I: "Iodine", P: "Phosphorus",
+  Cu: "Copper", Zn: "Zinc", Fe: "Iron", Co: "Cobalt", Ni: "Nickel",
+  Mn: "Manganese", Pd: "Palladium", Pt: "Platinum", Ag: "Silver", Au: "Gold",
+  Cd: "Cadmium", Cr: "Chromium", Ti: "Titanium", Zr: "Zirconium", In: "Indium",
+  Al: "Aluminum", Li: "Lithium", Na: "Sodium", K: "Potassium", Rb: "Rubidium",
+  Cs: "Cesium", Mg: "Magnesium", Ca: "Calcium", Sr: "Strontium", Ba: "Barium",
+  Y: "Yttrium", La: "Lanthanum",
+};
+
 const SkulptDisplay: React.FC<SkulptDisplayProps> = ({ code }) => {
   const outputRef = useRef<HTMLPreElement>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
@@ -95,6 +109,7 @@ const SkulptDisplay: React.FC<SkulptDisplayProps> = ({ code }) => {
   const [outputText, setOutputText] = useState<string>("");
   const [skulptLoaded, setSkulptLoaded] = useState(false);
   const [running, setRunning] = useState(false);
+  const [legendEntries, setLegendEntries] = useState<{ symbol: string; color: string }[]>([]);
 
   // Auto-run whenever the parent pushes new code down
   const prevCodeRef = React.useRef<string>("");
@@ -198,7 +213,36 @@ const builtinRead = (filename: string): string => {
 };
 
   const outf = (text: string) => {
-    setOutputText((prev) => prev + text);
+    const marker = "@@LEGEND@@";
+    const idx = text.indexOf(marker);
+    if (idx === -1) {
+      setOutputText((prev) => prev + text);
+      return;
+    }
+
+    // mof_renderer.py prints one line like "@@LEGEND@@Zn:#7799AA;C:#404040"
+    // before drawing starts. Pull that out for the color-key panel instead
+    // of showing it as raw output text.
+    const before = text.slice(0, idx);
+    const afterMarker = text.slice(idx + marker.length);
+    const newlineIdx = afterMarker.indexOf("\n");
+    const payload = newlineIdx === -1 ? afterMarker : afterMarker.slice(0, newlineIdx);
+    const rest = newlineIdx === -1 ? "" : afterMarker.slice(newlineIdx + 1);
+
+    const entries = payload
+      .split(";")
+      .filter(Boolean)
+      .map((pair) => {
+        const [symbol, color] = pair.split(":");
+        return { symbol, color };
+      })
+      .filter((e) => e.symbol && e.color);
+    setLegendEntries(entries);
+
+    const visible = before + rest;
+    if (visible) {
+      setOutputText((prev) => prev + visible);
+    }
   };
 
   const runCode = () => {
@@ -213,6 +257,7 @@ const builtinRead = (filename: string): string => {
 
     setRunning(true);
     setOutputText("");
+    setLegendEntries([]);
     if (canvasRef.current) {
       canvasRef.current.innerHTML = "";
     }
@@ -305,6 +350,42 @@ const builtinRead = (filename: string): string => {
           overflow: "auto",
         }}
       />
+
+      {legendEntries.length > 0 && (
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            gap: "6px 16px",
+            marginTop: 10,
+            padding: "8px 12px",
+            border: "1px solid #eee",
+            borderRadius: 4,
+            backgroundColor: "#fafafa",
+            fontSize: 12,
+          }}
+        >
+          {legendEntries.map(({ symbol, color }) => (
+            <div key={symbol} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span
+                style={{
+                  display: "inline-block",
+                  width: 12,
+                  height: 12,
+                  borderRadius: "50%",
+                  backgroundColor: color,
+                  border: "1px solid rgba(0,0,0,0.2)",
+                  flexShrink: 0,
+                }}
+              />
+              <span>
+                {symbol}
+                {ELEMENT_NAMES[symbol] ? ` — ${ELEMENT_NAMES[symbol]}` : ""}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
 
       {outputText.trim() !== "" && (
         <pre

@@ -23,6 +23,7 @@ import re
 
 from smiles_parser import SmilesParser
 from layout_engine import LayoutEngine
+from ring_utils import RingFinder
 from turtle_renderer import (
     ATOM_COLORS, BASE_RADII, DEFAULT_ATOM_COLOR,
     LABEL_Y_FRACTION, LABEL_FONT_SCALE, LABEL_MIN_RADIUS
@@ -60,6 +61,23 @@ GUEST_DISPLAY_SCALE = 0.60
 
 # Minimum on-screen radius (px) for the bare guest ion ball.
 GUEST_MIN_DISPLAY_PX = 9
+
+# Fixed angstrom-to-pixel reference for guest ion / hydration shell sizing
+# at mol_scale == 1, tied to the SAME per-atom scale factor as everything
+# else (self._mol_scale) rather than to this linker's own drawn square
+# size (_pore_r_px / _pore_fit_ang). The old approach derived px-per-Å
+# from how big THIS linker's schematic happened to be drawn, so a large
+# multi-armed linker (bigger square panel) made the exact same real ion
+# radius balloon to 1.5x+ the size it'd draw at for a small linker, with
+# nothing about the ion itself having changed. Calibrated so a typical
+# small linker at scale=1.0 draws the same size hydration shell as before.
+GUEST_PX_PER_ANGSTROM = 54.0
+
+# Hydration shell fill/outline colors — single source of truth shared by
+# _draw_guest_ion (the actual drawing) and get_legend_entries (the key),
+# so the legend swatch can never fall out of sync with what's on screen.
+HYDRATION_SHELL_COLOR = "#4A90D9"
+HYDRATION_SHELL_OUTLINE = "#2A6099"
 
 # Extra horizontal breathing room between the square-SBU panel and the cube panel.
 PANEL_GAP_PX = 70
@@ -167,6 +185,14 @@ class MOFRenderer:
         self.linker_mol = SmilesParser(render_smiles).parse()
         LayoutEngine(self.linker_mol).layout()
         self._center_linker()
+
+        # Rings where every member atom is aromatic get a delocalized-pi
+        # circle drawn inside them at render time, instead of (or in
+        # addition to) explicit double bonds — see _draw_aromatic_circles.
+        self._aromatic_rings = [
+            ring for ring in RingFinder(self.linker_mol).find_rings()
+            if ring and all(getattr(a, 'aromatic', False) for a in ring)
+        ]
 
         xs = [a.x for a in self.linker_mol.atoms]
         ys = [a.y for a in self.linker_mol.atoms]
@@ -533,6 +559,8 @@ class MOFRenderer:
             else:
                 self._line(sx1, sy1, sx2, sy2)
 
+        self._draw_aromatic_circles(mx, my, angle, mol_scale, alpha)
+
         self.t.pensize(1)
         for atom in self.linker_mol.atoms:
             ax, ay = self._transform(atom.x, atom.y, mx, my, angle, mol_scale)
@@ -545,6 +573,41 @@ class MOFRenderer:
                 fs = self._fit_font(atom.symbol, r)
                 if fs >= 5:
                     self._write_centered(ax, ay, atom.symbol, self._contrast_text_color(fill), fs)
+
+    def _draw_aromatic_circles(self, mx, my, angle, mol_scale, alpha):
+        """
+        Draws an inscribed circle inside every ring where all member atoms
+        are aromatic — the standard delocalized-pi-electron depiction.
+
+        This is used instead of alternating single/double (Kekulé) bonds
+        because assigning a specific Kekulé structure correctly requires
+        solving a matching problem over the ring system, and getting it
+        wrong would show a chemically misleading structure. The circle is
+        unambiguous and correct regardless of substitution pattern or
+        ring fusion, at the cost of not distinguishing bond orders within
+        the ring visually.
+        """
+        if not self._aromatic_rings:
+            return
+
+        t = self.t
+        color = self._dim_color("#707070", alpha) if alpha < 1.0 else "#707070"
+
+        for ring in self._aromatic_rings:
+            cx = sum(a.x for a in ring) / len(ring)
+            cy = sum(a.y for a in ring) / len(ring)
+            avg_r = sum(math.hypot(a.x - cx, a.y - cy) for a in ring) / len(ring)
+            circle_r = avg_r * 0.62 * mol_scale
+            if circle_r < 2:
+                continue
+
+            px, py = self._transform(cx, cy, mx, my, angle, mol_scale)
+            t.penup(); t.goto(px, py - circle_r); t.pendown()
+            t.pencolor(color)
+            t.pensize(max(1, 1.5 * mol_scale * alpha))
+            t.circle(circle_r)
+            t.penup()
+        t.pensize(1)
 
     def _transform(self, lx, ly, mx, my, angle, mol_scale):
         sx, sy = lx * mol_scale, ly * mol_scale
@@ -581,10 +644,10 @@ class MOFRenderer:
         hydrated_ang = self._guest_hydrated_ang
         effective_ang = hydrated_ang if hydrated_ang is not None else ionic_ang
 
-        px_per_ang_pore  = self._pore_r_px / max(self._pore_fit_ang, 0.001)
+        px_per_ang       = GUEST_PX_PER_ANGSTROM * self._mol_scale
         hydrated_ang_eff = hydrated_ang if hydrated_ang else ionic_ang
-        true_hyd_px      = hydrated_ang_eff * px_per_ang_pore
-        true_ion_px      = ionic_ang        * px_per_ang_pore
+        true_hyd_px      = hydrated_ang_eff * px_per_ang
+        true_ion_px      = ionic_ang        * px_per_ang
 
         if effective_ang > self._pore_fit_ang:
             display_hydrated = true_hyd_px * 1.4
@@ -599,13 +662,6 @@ class MOFRenderer:
             if display_hydrated > 0:
                 display_hydrated += grow
 
-        if effective_ang <= self._pore_fit_ang * 0.80:
-            fit_color = "#3FB950"
-        elif effective_ang <= self._pore_fit_ang:
-            fit_color = "#D29922"
-        else:
-            fit_color = "#F85149"
-
         element_symbol = re.match(r"[A-Za-z]+", self.guest_ion or "")
         element_symbol = element_symbol.group(0) if element_symbol else ""
         ion_fill, _ = ATOM_COLORS.get(element_symbol, DEFAULT_ATOM_COLOR)
@@ -615,14 +671,14 @@ class MOFRenderer:
         if hydrated_ang is not None and display_hydrated > display_ion + 2:
             t.penup(); t.goto(center_x, center_y - display_hydrated)
             t.pendown()
-            t.pencolor("#2A6099"); t.pensize(1)
-            t.fillcolor("#4A90D9")
+            t.pencolor(HYDRATION_SHELL_OUTLINE); t.pensize(1)
+            t.fillcolor(HYDRATION_SHELL_COLOR)
             t.begin_fill(); t.circle(display_hydrated); t.end_fill()
             t.penup()
 
         t.penup(); t.goto(center_x, center_y - display_ion)
         t.pendown()
-        t.pencolor(fit_color); t.pensize(3)
+        t.pencolor("#555555"); t.pensize(1)
         t.fillcolor(ion_fill)
         t.begin_fill(); t.circle(display_ion); t.end_fill()
         t.penup()
@@ -657,7 +713,7 @@ class MOFRenderer:
             if ionic_ang is not None:
                 lines.append((f"Guest ion radius (bare): {ionic_ang:.2f} \u00c5", "#8B949E"))
             if hydrated_ang is not None:
-                lines.append((f"Guest ion radius (hydrated): {hydrated_ang:.2f} \u00c5  vs. PLD bottleneck {self._pore_fit_ang:.2f} \u00c5", "#4A90D9"))
+                lines.append((f"Guest ion radius (hydrated): {hydrated_ang:.2f} \u00c5  vs. PLD bottleneck {self._pore_fit_ang:.2f} \u00c5", HYDRATION_SHELL_COLOR))
             src_note = "Exp. verified" if "Experimental" in verified else "Est./unverified"
             lines.append((f"* {src_note} ion radii; pore from MOF_data.csv", "#6E7681"))
 
@@ -710,6 +766,50 @@ class MOFRenderer:
         n    = len(label)
         fs   = int(min(side/0.72, side/(0.65*max(n,1))) * LABEL_FONT_SCALE)
         return max(fs, 0)
+
+    def get_legend_entries(self):
+        """
+        Returns an ordered list of (symbol, fill_hex) for every distinct
+        element actually present in this specific render — the linker's
+        own atoms, the metal node, and the guest ion (if any) — deduping
+        aromatic lowercase symbols (e.g. 'c') with their element ('C')
+        since they share the same color. Metal first, then linker atoms
+        in the order they appear, then the guest ion.
+
+        Deliberately reads straight from ATOM_COLORS (the same table the
+        drawing itself uses) rather than a separate hardcoded list, so
+        the legend can't silently drift out of sync with what's drawn.
+        """
+        symbols = []
+        seen = set()
+
+        def add(sym):
+            if not sym:
+                return
+            canonical = sym.upper() if sym in SmilesParser.AROMATIC else sym
+            if canonical not in seen:
+                seen.add(canonical)
+                symbols.append(canonical)
+
+        add(self.metal)
+        for atom in self.linker_mol.atoms:
+            add(atom.symbol)
+        if self.guest_ion:
+            m = re.match(r"[A-Za-z]+", self.guest_ion)
+            if m:
+                add(m.group(0))
+
+        entries = []
+        for sym in symbols:
+            fill, _ = ATOM_COLORS.get(sym, DEFAULT_ATOM_COLOR)
+            entries.append((sym, fill))
+
+        # Matches the fill color _draw_guest_ion uses for the hydration
+        # shell — kept as one literal here and referenced there too, so
+        # if that color ever changes it only needs updating in one place.
+        if self.guest_ion and self._guest_hydrated_ang is not None:
+            entries.append(("Hydration Shell", HYDRATION_SHELL_COLOR))
+        return entries
 
     @staticmethod
     def _contrast_text_color(fill_hex):
@@ -782,7 +882,15 @@ def draw_lattice(metal, linker_smiles, mof_id=None, guest_ion=None, guest_ion_me
         pass
 
     has_guest = renderer.guest_ion is not None
-    
+
+    # Emit a structured legend line for the UI to parse (see
+    # SkulptDisplay.tsx's outf handler) — built from the same
+    # ATOM_COLORS table the drawing itself uses, so it can't drift out
+    # of sync with what's actually on the canvas. Printed before drawing
+    # so it's still available even if the draw itself fails partway.
+    legend = renderer.get_legend_entries()
+    print("@@LEGEND@@" + ";".join(f"{sym}:{color}" for sym, color in legend))
+
     try:
         if is_simple:
             if has_guest:
@@ -795,6 +903,16 @@ def draw_lattice(metal, linker_smiles, mof_id=None, guest_ion=None, guest_ion_me
             else:
                 renderer.draw_without_guest()
     finally:
+        # Re-assert the hidden state immediately before the final flush.
+        # `t.hideturtle()` was already called right after creating `t`,
+        # but with tracer(0)/update() batching everything into one final
+        # repaint, the turtle cursor icon has been showing up at its last
+        # position in that repaint — re-asserting it right here, as the
+        # very last thing before the flush, is the reliable fix.
+        try:
+            t.hideturtle()
+        except Exception:
+            pass
         # Flush the whole drawing to the canvas in one paint. In a
         # `finally` so a partial/failed draw still shows whatever was
         # completed instead of leaving a blank canvas.
