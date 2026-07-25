@@ -139,9 +139,9 @@ def tokenize_key(request):
             key="gemini_token",
             value=token,
             max_age=5400,
-            secure=is_secure,
+            secure=True,
             httponly=True,
-            samesite="Lax",
+            samesite="None",
             path="/",
         )
         logger.info("[TOKENIZE] Cookie set in response")
