@@ -38,7 +38,7 @@ PRODUCTION_DOMAIN = os.getenv("PRODUCTION_DOMAIN", "your-app.your-domain.com")
 ALLOWED_HOSTS = [
     "localhost",
     "127.0.0.1",
-    PRODUCTION_DOMAIN,
+    "chem-llm-web-app.onrender.com",
 ]
 
 ############################################
@@ -77,18 +77,19 @@ MIDDLEWARE = [
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:8000",
     "http://127.0.0.1:8000",
-    "http://localhost:32775",            # Vite dev server
-    f"https://{PRODUCTION_DOMAIN}",     # Production HTTPS
+    "http://localhost:32775",            
+    "https://chem-llm-web-app-frontend.onrender.com",     
 ]
 
 CORS_ALLOW_HEADERS = list(default_headers) + ["X-Token", "X-CSRFToken"]
+
 CORS_ALLOW_CREDENTIALS = True
 
 CSRF_TRUSTED_ORIGINS = [
     "http://localhost:8000",
     "http://127.0.0.1:8000",
     "http://localhost:32775",
-    f"https://{PRODUCTION_DOMAIN}",
+    "https://chem-llm-web-app-frontend.onrender.com",
 ]
 
 # CSRF Cookie Settings
