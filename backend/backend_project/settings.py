@@ -1,3 +1,17 @@
+"""
+Django settings for backend_project.
+
+This backend does double duty: it's both the REST API (api/views.py)
+and the static-file server for the built React SPA (see the Static
+files / Templates sections below, and backend_project.views.frontend) —
+there's no separate frontend web server in production, Django/Gunicorn
++ WhiteNoise serves everything.
+
+NOTE: the two print() statements just below run on every process start
+(including every Gunicorn worker) — logging.info would be more
+consistent with the rest of the app's logging setup (see the LOGGING
+section at the bottom), but these are harmless as-is.
+"""
 import os
 from pathlib import Path
 from dotenv import load_dotenv
@@ -80,6 +94,12 @@ CORS_ALLOWED_ORIGINS = [
     "http://localhost:32775",            # Vite dev server
     f"https://{PRODUCTION_DOMAIN}",     # Production HTTPS
 ]
+# NOTE: "32775" is whatever port Vite happened to pick last — Vite's
+# default dev port is actually 5173, and it auto-increments to the next
+# free port if that's taken. If your local Vite dev server starts on a
+# different port than 32775, CORS requests from it will be rejected
+# until this list (and the matching entry in CSRF_TRUSTED_ORIGINS
+# below) is updated to match.
 
 CORS_ALLOW_HEADERS = list(default_headers) + ["X-Token", "X-CSRFToken"]
 CORS_ALLOW_CREDENTIALS = True
@@ -122,6 +142,11 @@ STATICFILES_DIRS = [
 
 DIST_ASSETS = BASE_DIR.parent / "frontend" / "dist" / "assets"
 if DIST_ASSETS.exists() and DIST_ASSETS != STATIC_ROOT:
+    # Only add the raw Vite build output as a source directory if it's
+    # actually present (it won't be, e.g., in a backend-only checkout
+    # or before `npm run build` has been run) and isn't the same path
+    # `collectstatic` already writes to (STATIC_ROOT) — avoiding that
+    # would have Django trying to collect a directory from itself.
     STATICFILES_DIRS.append(DIST_ASSETS)
 
 STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"

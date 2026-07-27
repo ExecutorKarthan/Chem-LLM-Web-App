@@ -6,6 +6,19 @@ import ChemApp from "./components/ChemApp.js";
 import { BACKEND_URL } from "./config.js";
 
 // Check if cookie token exists on the server
+//
+// This is the authoritative check — the real Gemini API key only
+// exists server-side, referenced by an httponly cookie the frontend
+// can't read directly (see views.check_cookie), so this asks the
+// backend to confirm on our behalf rather than inspecting
+// document.cookie. It's independent of the `localStorage.getItem
+// ("splash_terms_agreed")` check below, which only tracks whether the
+// splash gate's terms were agreed to on this browser — both must pass
+// to skip the splash gate (see the `termsAgreed && cookiePresent`
+// check in App below), since a fresh cookie doesn't imply the terms
+// were seen on this browser, and terms agreed on this browser doesn't
+// imply the server-side cookie/key are still valid (e.g. after the
+// cache entry expires or "Clear Token" is used elsewhere).
 const checkTokenServerSide = async (): Promise<boolean> => {
   try {
     const url = `${BACKEND_URL}/api/check-cookie/`;
@@ -51,7 +64,10 @@ function App(): JSX.Element {
     };
     checkCookie();
 
-    if (localStorage.getItem("gemini_token")) {
+    // See the note on checkTokenServerSide above — this is the
+    // splash-gate consent flag set by Splashgate.tsx, unrelated to the
+    // real server-side auth cookie named "gemini_token".
+    if (localStorage.getItem("splash_terms_agreed")) {
       setTermsAgreed(true);
     }
   }, []);

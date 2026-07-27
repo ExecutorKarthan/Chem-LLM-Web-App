@@ -8,6 +8,17 @@ import getCSRFToken from "../utils/CSRFReader.js";
 
 // Create an initial page that will restrict people from accessing the app
 // without accepting the terms or providing an API key
+//
+// Flow: user checks "agree" and enters their raw Gemini API key here ->
+// handleSubmit exchanges it for a token via /api/tokenize-key/ (the
+// real key ends up cached server-side, referenced by an httponly
+// cookie — see views.tokenize_key) -> on success, a client-side-only
+// localStorage flag "splash_terms_agreed" is set purely as a "user has
+// completed onboarding" marker -> the page reloads, and App.tsx checks
+// that localStorage flag to decide whether to show this splash gate
+// again or go straight to the app. Clearing that localStorage flag
+// (see LLMResponseBox's handleClearToken) makes the splash gate
+// reappear on next load.
 const SplashGate: React.FC = () => {
 
   // Create constants and their mutators for reference
@@ -32,6 +43,10 @@ const SplashGate: React.FC = () => {
       // BACKEND_URL is "" in production (relative URLs, Django serves everything)
       // and "http://localhost:8000" in development (Vite dev server proxies /api).
       // It is never hardcoded here — see src/config.ts.
+      // NOTE: console.log debug statements throughout this function
+      // (with emoji prefixes) look like leftovers from troubleshooting
+      // the CSRF/tokenize flow — harmless in production but noisy;
+      // safe to trim once this path is confirmed stable.
       await axios.get(`${BACKEND_URL}/api/csrf/`, { withCredentials: true });
 
       const csrfToken = getCSRFToken();
@@ -54,7 +69,12 @@ const SplashGate: React.FC = () => {
       console.log('✅ Tokenize response:', response.status);
 
       if (response.status === 200) {
-        localStorage.setItem("gemini_token", "agreed");
+        // Purely a client-side "onboarding complete" marker for
+        // App.tsx's gate check — NOT the real API key/token (that's
+        // server-side, referenced by an httponly cookie named
+        // "gemini_token"). Deliberately named differently here to
+        // avoid confusion with that unrelated server-side cookie.
+        localStorage.setItem("splash_terms_agreed", "true");
         window.location.reload();
       } else {
         setError("Failed to authenticate API key.");

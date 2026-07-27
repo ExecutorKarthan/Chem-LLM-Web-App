@@ -1,3 +1,19 @@
+"""
+Runtime MOF lookup index, built once when Django starts (module-level
+code below runs at import time, not per-request).
+
+Two separate sets of dicts exist here for two different jobs:
+  - METAL_TO_LINKERS / LINKER_TO_METALS / LINKER_TO_NAME: which
+    metal/linker combinations are valid at all, used to populate and
+    filter the frontend's dropdowns (see views.get_mof_meta and
+    views.filter_mofs_dropdown).
+  - METAL_TO_MOF_IDS / LINKER_TO_MOF_IDS / MOF_METRICS: given a
+    specific validated metal+linker pair, which exact MOF entry (by
+    formula/mof_id) it corresponds to, via set intersection in
+    `find_mof`, and that entry's pore metrics.
+Both are sourced from the same underlying registry CSVs, just indexed
+differently for these two different query patterns.
+"""
 import csv
 from pathlib import Path
 
@@ -12,6 +28,12 @@ LINKER_TO_METALS = {}
 LINKER_TO_NAME = {}
 
 def load_registries():
+    """
+    Populates METAL_TO_LINKERS, LINKER_TO_METALS, and LINKER_TO_NAME
+    from the two registry CSVs — used for dropdown population/filtering,
+    as opposed to _load_id_registry below which builds the separate
+    mof_id lookup dicts used by find_mof.
+    """
     global METAL_TO_LINKERS, LINKER_TO_METALS, LINKER_TO_NAME
     
     # 1. Process registry_by_metals.csv
@@ -59,7 +81,16 @@ def _load_id_registry(path, key_column, ids_column):
 
 
 def _load_mof_metrics():
-    """Loads MOF_data.csv into {formula (mof_id): {"lcd": float, "pld": float}}."""
+    """
+    Loads MOF_data.csv into {formula (mof_id): {"lcd": float, "pld": float}}.
+
+    Reads by column position (row[0]/row[1]/row[2]) rather than
+    DictReader + header name lookups like the other loaders in this
+    file use, because MOF_data.csv's headers contain mojibake
+    (encoding-corrupted) text that doesn't match cleanly by name — the
+    columns' meaning and order (identifier, LCD, PLD, ...) is stable
+    even though the header text itself isn't reliable.
+    """
     metrics = {}
     if not MOF_DATA_CSV_PATH.is_file():
         return metrics

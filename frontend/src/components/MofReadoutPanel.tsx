@@ -1,25 +1,20 @@
 // MofReadoutPanel.tsx
 //
-// Renders the pore-fit readout (LCD/PLD, ion radii, fit verdict) as
-// normal HTML below the Skulpt canvas. This used to be drawn as tiny
-// turtle-graphics text inside the diagram itself — including an arc-text
-// "Hydration Shell" label — both of which were illegible at the sizes
-// the canvas allows. The verdict math is unchanged; it's just computed
-// server-side now (see api/views.py::_compute_pore_readout) and shipped
-// as data instead of pixels.
-
-// MofReadoutPanel.tsx
-//
-// Renders the pore-fit readout (LCD/PLD, ion radii, fit verdict) as
-// normal HTML below the Skulpt canvas. This used to be drawn as tiny
-// turtle-graphics text inside the diagram itself — including an arc-text
-// "Hydration Shell" label — both of which were illegible at the sizes
-// the canvas allows. The verdict math is unchanged; it's just computed
-// server-side now (see api/views.py::_compute_pore_readout) and shipped
-// as data instead of pixels.
+// Renders the pore-fit readout (LCD/PLD, ion radii, and where the ion's
+// radius data came from) as normal HTML below the Skulpt canvas. This
+// used to be drawn as tiny turtle-graphics text inside the diagram
+// itself — including an arc-text "Hydration Shell" label — both of
+// which were illegible at the sizes the canvas allows. The raw numbers
+// are unchanged; they're just computed server-side now (see
+// api/views.py::_build_pore_readout) and shipped as data instead of
+// pixels. Note: this panel shows the raw metrics only, not a fit
+// verdict (FITS/TOO LARGE) — that comparison logic exists separately
+// in mof_renderer.py's get_readout_lines but isn't surfaced here.
 
 import React from "react";
 
+// Mirrors the dict returned by views.py::_build_pore_readout — keep
+// these fields in sync with that function if its output shape changes.
 export interface PoreReadout {
   lcd: number;
   pld: number;

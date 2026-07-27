@@ -1,3 +1,11 @@
+// ChemApp.tsx
+//
+// Top-level page layout: an LLM entry/response row, a mode toggle, and
+// a second row whose contents swap based on that toggle — "MOF
+// Explorer" (MOFInput + MOF Skulpt canvas/readout) vs. "Linker Viewer"
+// (SmilesInput + MoleculeViewer, for inspecting arbitrary SMILES
+// without going through the MOF metal/linker pairing flow).
+
 // Import needed modules
 import { useState } from "react";
 import axios from "axios";
@@ -8,7 +16,7 @@ import { BACKEND_URL } from "../config.js";
 import SmilesInput from "./SMILESInput.js";
 import MoleculeViewer from "./MoleculeViewer.js";
 import MOFInput from "./MOFInput.js";
-import type { PoreReadout } from "./MOFInput.js";
+import type { PoreReadout } from "./MofReadoutPanel.js";
 import MofReadoutPanel from "./MofReadoutPanel.js";
 import SkulptDisplay from "./SkulptDisplay.js";
 
@@ -51,6 +59,11 @@ const ChemApp = () => {
     return getCookie("csrftoken") || "";
   };
 
+  // Surfaces a backend error to both `error` (used for the Alert banner)
+  // and `response` (so it's also visible in the main response box).
+  // The csv_missing case gets a specific, actionable message since it
+  // means the server's MOF reference data is missing entirely — a setup
+  // problem rather than a normal per-request failure.
   const handleError = (err: any) => {
     console.error("Full error object:", err);
     console.error("Error response:", err?.response);
@@ -71,6 +84,13 @@ const ChemApp = () => {
     setResponse(backendError);
   };
 
+  // Three ways to query Gemini, corresponding to the three backend
+  // endpoints in views.py: a plain question with no MOF context
+  // (onSubmit), a one-off "prime" call that hands Gemini the whole MOF
+  // CSV so it acknowledges receiving it (onSubmitData, no user prompt
+  // needed), and a question answered with the MOF CSV prepended every
+  // time (onSubmitWithData) — useful when the user hasn't primed first
+  // or wants the data freshly in-context for that specific question.
   const onSubmit = async () => {
     if (!userQuery.trim()) return;
     const csrfToken = beginRequest();
@@ -130,7 +150,15 @@ const ChemApp = () => {
     const names = new Array(smilesList.length).fill("");
     setLinkerCommonNames(names);
 
-    // Resolve common names via PubChem
+    // Resolve common names via PubChem. This is a direct browser->PubChem
+    // call (not proxied through the Django backend, unlike the MOF-side
+    // name lookups in mof_registry_builder.py), and needs two round trips
+    // per molecule since PubChem's API doesn't offer a single SMILES ->
+    // synonym endpoint: first resolve the SMILES to a PubChem CID, then
+    // look up that CID's synonyms. Each molecule's lookup runs
+    // independently (not awaited in sequence) so one slow/failed lookup
+    // doesn't block the others from updating their label as soon as
+    // they're ready.
     smilesList.forEach(async (smiles, index) => {
       try {
         const encoded = encodeURIComponent(smiles);
@@ -184,6 +212,11 @@ const ChemApp = () => {
             response={response}
             loading={loading}
             error={error}
+            // NOTE: this handler doesn't do anything — `{""}` is just an
+            // expression statement, not a save action. If "save code"
+            // is meant to actually do something, this still needs
+            // implementing; if it's not needed anymore, LLMResponseBox's
+            // onSaveCode prop could probably be dropped instead.
             onSaveCode={(code: string) => {""}}
           />
         </Col>

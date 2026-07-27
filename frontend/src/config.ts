@@ -1,4 +1,12 @@
 // src/config.ts
+//
+// BACKEND_URL resolves in two steps: an explicit VITE_BACKEND_URL env
+// var wins if set (e.g. for a deploy config that wants a specific
+// origin); otherwise getBackendUrl() below auto-detects dev vs. prod —
+// 'http://localhost:8000' when running under the Vite dev server (so
+// /api calls reach the separately-running Django dev server), or ""
+// (relative URLs) in a production build where Django serves everything
+// from the same origin.
 const isDevelopment = import.meta.env.DEV;
 
 const getBackendUrl = () => {
@@ -29,4 +37,7 @@ const getBackendUrl = () => {
   return backendUrl;
 };
 
-export const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "";
+// Falls back to getBackendUrl()'s auto-detected value only when
+// VITE_BACKEND_URL isn't explicitly set, so an explicit env var always
+// takes precedence over auto-detection.
+export const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || getBackendUrl();

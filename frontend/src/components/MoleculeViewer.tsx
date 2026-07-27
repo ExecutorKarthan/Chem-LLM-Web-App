@@ -14,6 +14,12 @@ interface MoleculeViewerProps {
 }
 
 // ─── RDKit singleton ──────────────────────────────────────────────────────────
+// RDKit's WASM module is expensive to load (it's fetched and compiled
+// once per page), so every MoleculePanel shares a single init promise
+// instead of each one loading its own copy. Caching the *promise*
+// (not just the resolved module) also means concurrent panels that
+// mount before the first load finishes all await the same in-flight
+// load rather than kicking off duplicate fetches.
 let rdkitPromise: Promise<any> | null = null;
 
 const getRDKit = () => {
@@ -78,6 +84,13 @@ const MoleculePanel: React.FC<MoleculePanelProps> = ({ smiles, label, substructu
         const RDKit = await getRDKit();
         if (rafRef.current) cancelAnimationFrame(rafRef.current);
 
+        // Wrapped in rAF so the (synchronous, potentially slow for large
+        // structures) RDKit parsing/rendering work runs after the browser
+        // has had a chance to paint the "Rendering..." loading state,
+        // rather than blocking the main thread before that state is
+        // visible. Cancelling any previous pending frame above avoids a
+        // stale render clobbering a newer one if smiles/substructure/width
+        // change again in quick succession.
         rafRef.current = requestAnimationFrame(() => {
           let mol: any = null;
           let qmol: any = null;
@@ -128,6 +141,11 @@ const MoleculePanel: React.FC<MoleculePanelProps> = ({ smiles, label, substructu
             svgContainerRef.current!.innerHTML = "";
             setError("Failed to render molecule.");
           } finally {
+            // RDKit's mol/qmol objects are backed by WASM heap memory,
+            // not regular JS-garbage-collected objects — they must be
+            // explicitly deleted or they leak for the lifetime of the
+            // page, which matters here since a new mol/qmol gets created
+            // on every re-render (SMILES/substructure/width change).
             mol?.delete?.();
             qmol?.delete?.();
             setLoading(false);
