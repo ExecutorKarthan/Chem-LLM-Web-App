@@ -1,3 +1,10 @@
+// SMILESInput.tsx
+//
+// Free-form molecule entry for "Linker Viewer" mode (as opposed to
+// MOFInput's dropdown-driven metal+linker picker). Supports up to
+// MAX_MOLECULES SMILES strings side by side plus one shared
+// substructure query highlighted across all of them.
+
 import React, { useState } from "react";
 import { Input, Button } from "antd";
 import { PlusOutlined, DeleteOutlined } from "@ant-design/icons";
@@ -12,9 +19,14 @@ const SmilesInput: React.FC<SmilesInputProps> = ({ onSubmitSmiles }) => {
   const [rows, setRows] = useState<string[]>([""]);
   const [substructure, setSubstructure] = useState<string>("");
 
+  // `rows` holds one SMILES string per molecule slot, capped at
+  // MAX_MOLECULES; handleAdd/handleRemove grow or shrink it by index
+  // rather than by any stable per-row id, which is fine here since rows
+  // are always rendered in order and removal doesn't need to preserve
+  // any row's identity across the change.
   const handleChange = (index: number, value: string) => {
     setRows((prev) => prev.map((r, i) => (i === index ? value : r)));
-  };
+  };  
 
   const handleAdd = () => {
     if (rows.length < MAX_MOLECULES) {
@@ -100,7 +112,6 @@ const SmilesInput: React.FC<SmilesInputProps> = ({ onSubmitSmiles }) => {
         </span>
       </div>
 
-      {/* ── Single render button ── */}
       <Button
         type="primary"
         onClick={handleRender}

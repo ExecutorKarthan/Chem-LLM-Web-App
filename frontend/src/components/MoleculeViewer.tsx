@@ -9,9 +9,17 @@ import initRDKitModule from "@rdkit/rdkit";
 interface MoleculeViewerProps {
   smiles: string[];
   substructure: string;
+  linkerName?: string;    // Kept for backward compatibility with MOF Explorer
+  linkerNames?: string[]; // ADDED: Prop for the common names array
 }
 
 // ─── RDKit singleton ──────────────────────────────────────────────────────────
+// RDKit's WASM module is expensive to load (it's fetched and compiled
+// once per page), so every MoleculePanel shares a single init promise
+// instead of each one loading its own copy. Caching the *promise*
+// (not just the resolved module) also means concurrent panels that
+// mount before the first load finishes all await the same in-flight
+// load rather than kicking off duplicate fetches.
 let rdkitPromise: Promise<any> | null = null;
 
 const getRDKit = () => {
@@ -76,6 +84,13 @@ const MoleculePanel: React.FC<MoleculePanelProps> = ({ smiles, label, substructu
         const RDKit = await getRDKit();
         if (rafRef.current) cancelAnimationFrame(rafRef.current);
 
+        // Wrapped in rAF so the (synchronous, potentially slow for large
+        // structures) RDKit parsing/rendering work runs after the browser
+        // has had a chance to paint the "Rendering..." loading state,
+        // rather than blocking the main thread before that state is
+        // visible. Cancelling any previous pending frame above avoids a
+        // stale render clobbering a newer one if smiles/substructure/width
+        // change again in quick succession.
         rafRef.current = requestAnimationFrame(() => {
           let mol: any = null;
           let qmol: any = null;
@@ -89,24 +104,17 @@ const MoleculePanel: React.FC<MoleculePanelProps> = ({ smiles, label, substructu
               return;
             }
 
-            // Build highlight details — substructure match if provided,
-            // otherwise plain size options
             let mdetails: Record<string, any> = { width, height };
 
             if (substructure.trim()) {
               try {
                 qmol = RDKit.get_qmol(substructure.trim());
-
                 if (qmol && qmol.is_valid()) {
                   const matchJson = mol.get_substruct_match(qmol);
                   const match = JSON.parse(matchJson);
-
-                  // get_substruct_match returns {} when there is no match
-                  const hasMatch =
-                    match.atoms && match.atoms.length > 0;
+                  const hasMatch = match.atoms && match.atoms.length > 0;
 
                   if (hasMatch) {
-                    // Merge match highlights with size
                     mdetails = { ...match, width, height };
                     setMatchNote("✓ Substructure match found");
                   } else {
@@ -122,8 +130,6 @@ const MoleculePanel: React.FC<MoleculePanelProps> = ({ smiles, label, substructu
             }
 
             const svg = mol.get_svg_with_highlights(JSON.stringify(mdetails));
-
-            // Make width fluid so SVG never overflows narrow screens
             const patched = svg
               .replace(/width="\d+"/, `width="100%"`)
               .replace(/height="\d+"/, `height="${height}"`);
@@ -135,6 +141,11 @@ const MoleculePanel: React.FC<MoleculePanelProps> = ({ smiles, label, substructu
             svgContainerRef.current!.innerHTML = "";
             setError("Failed to render molecule.");
           } finally {
+            // RDKit's mol/qmol objects are backed by WASM heap memory,
+            // not regular JS-garbage-collected objects — they must be
+            // explicitly deleted or they leak for the lifetime of the
+            // page, which matters here since a new mol/qmol gets created
+            // on every re-render (SMILES/substructure/width change).
             mol?.delete?.();
             qmol?.delete?.();
             setLoading(false);
@@ -172,7 +183,6 @@ const MoleculePanel: React.FC<MoleculePanelProps> = ({ smiles, label, substructu
       <div style={{ fontSize: 12, fontWeight: 600, color: "#555", marginBottom: 2 }}>
         {label}
       </div>
-
       <div
         style={{
           fontFamily: "monospace",
@@ -185,11 +195,8 @@ const MoleculePanel: React.FC<MoleculePanelProps> = ({ smiles, label, substructu
       >
         {smiles}
       </div>
-
       {loading && <div style={{ color: "#555", fontSize: 12 }}>Rendering...</div>}
       {error && <div style={{ color: "red", fontSize: 12 }}>{error}</div>}
-
-      {/* Match note — green for hit, grey for no match, amber for invalid */}
       {matchNote && (
         <div
           style={{
@@ -205,7 +212,6 @@ const MoleculePanel: React.FC<MoleculePanelProps> = ({ smiles, label, substructu
           {matchNote}
         </div>
       )}
-
       <div ref={outerRef} style={{ width: "100%", overflow: "hidden" }}>
         <div ref={svgContainerRef} style={{ width: "100%", lineHeight: 0 }} />
       </div>
@@ -214,7 +220,7 @@ const MoleculePanel: React.FC<MoleculePanelProps> = ({ smiles, label, substructu
 };
 
 // ─── Main viewer ──────────────────────────────────────────────────────────────
-const MoleculeViewer: React.FC<MoleculeViewerProps> = ({ smiles, substructure }) => {
+const MoleculeViewer: React.FC<MoleculeViewerProps> = ({ smiles, substructure, linkerName, linkerNames }) => {
   if (!smiles || smiles.length === 0) {
     return (
       <div style={{ width: "100%" }}>
@@ -229,6 +235,20 @@ const MoleculeViewer: React.FC<MoleculeViewerProps> = ({ smiles, substructure })
   return (
     <div style={{ width: "100%" }}>
       <h3 style={{ margin: "0 0 12px 0" }}>Molecule Viewer</h3>
+      
+      {/* Show single linker name if provided (MOF Explorer mode) */}
+      {linkerName && (
+        <div style={{ 
+          textAlign: "center", 
+          marginBottom: 16, 
+          fontWeight: 700, 
+          color: "#333",
+          fontSize: 14 
+        }}>
+          {linkerName}
+        </div>
+      )}
+
       <div
         style={{
           display: "grid",
@@ -236,14 +256,15 @@ const MoleculeViewer: React.FC<MoleculeViewerProps> = ({ smiles, substructure })
           gap: 12,
         }}
       >
-        {smiles.map((s, i) => (
-          <MoleculePanel
-            key={`${i}-${s}`}
-            smiles={s}
-            label={`Molecule ${i + 1}`}
-            substructure={substructure}
-          />
-        ))}
+      {smiles.map((s, i) => (
+        <MoleculePanel
+          key={`${i}-${s}`}
+          smiles={s}
+          // Prioritize linkerNames array, fallback to single linkerName, then default label
+          label={linkerNames?.[i] || linkerName || `Molecule ${i + 1}`} 
+          substructure={substructure}
+        />
+      ))}
       </div>
     </div>
   );

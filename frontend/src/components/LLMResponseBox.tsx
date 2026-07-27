@@ -27,10 +27,18 @@ const LLMResponseBox: React.FC<LLMResponseProps> = ({
     return processResponse(response);
   };
 
-// Function to clear the stored token
+// Logs the user out of Gemini. The actual API key lives server-side
+// (see views.tokenize_key/clear_token — it's cached against a UUID
+// stored in an httponly cookie, which JS can't read or clear directly),
+// so the real cleanup there is the POST to /api/clear-token/ below.
+//
+// This also clears "splash_terms_agreed" — the splash-screen consent
+// flag set by Splashgate.tsx and read by App.tsx — so clicking
+// "Clear Token" resets onboarding too and the splash gate reappears
+// on next load, alongside the actual server-side token being cleared.
 const handleClearToken = async () => {
   try {
-    localStorage.removeItem("gemini_token");
+    localStorage.removeItem("splash_terms_agreed");
     localStorage.removeItem("resourceSelection");
     await axios.post(
       `${BACKEND_URL}` + "/api/clear-token/",
@@ -67,6 +75,12 @@ const handleClearToken = async () => {
         {displayContent()}
       </div>
       {/* If there is a response, display the save to editor button */}
+      {/* NOTE: this block renders an empty div with no children whenever
+          there's a response — looks like a leftover container for
+          buttons that were since moved out (the "Save to Editor" and
+          "Clear Token" buttons below render unconditionally/on a
+          different condition instead). Safe to remove if nothing's
+          meant to go here. */}
       {response && !loading && !error && (
         <div
           style={{
