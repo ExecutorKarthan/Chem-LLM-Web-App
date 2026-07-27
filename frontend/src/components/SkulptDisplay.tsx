@@ -177,8 +177,19 @@ const SkulptDisplay: React.FC<SkulptDisplayProps> = ({ code }) => {
 
   // builtinRead: Skulpt stdlib files use this normally; we intercept
   // requests for our own modules and route them to the backend instead.
-  
+  //
+  // Skulpt calls this once per `import`, first probing for a `.js`
+  // wrapper (a native-JS implementation of the module) before falling
+  // back to a `.py` file. None of our MOF-engine modules have a JS
+  // wrapper, so step 1 below deliberately throws for those names —
+  // NOT finding the .js is what tells Skulpt to try the .py path next;
+  // returning a string here instead would make Skulpt treat this as a
+  // (wrong) JS module.
+
 const builtinRead = (filename: string): string => {
+  // NOTE: left over from debugging module resolution — safe to remove
+  // once this is confirmed stable, but currently harmless (Skulpt's
+  // own console, not user-facing).
   console.log("Skulpt requested:", filename);
 
   // 1. If Skulpt is checking for a JS wrapper for your custom module, 
@@ -279,7 +290,12 @@ const builtinRead = (filename: string): string => {
         height,
       };
 
-// We explicitly lock down Skulpt's canvas targeting settings here.
+      // NOTE: this second assignment immediately overwrites the one
+      // above with equivalent values — looks like leftover debugging
+      // cruft (the comments below suggest it was added while
+      // troubleshooting a canvas-offset issue) rather than something
+      // intentionally different. Harmless as-is since the two objects
+      // are equivalent, but safe to delete if you want to trim this up.
       window.Sk.TurtleGraphics = {
         target: canvasRef.current,
         width: width,

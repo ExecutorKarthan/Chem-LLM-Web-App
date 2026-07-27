@@ -1,4 +1,11 @@
 # backend_project/urls.py
+#
+# This is the active URLconf (see settings.ROOT_URLCONF =
+# "backend_project.urls"). Route order matters below: the WASM and
+# /assets/ static routes must come before the catch-all SPA fallback,
+# or the fallback would intercept those requests and serve index.html
+# instead of the actual file (see the inline note further down for the
+# specific bug this guards against).
 from django.contrib import admin
 from django.urls import path, re_path
 from django.conf import settings

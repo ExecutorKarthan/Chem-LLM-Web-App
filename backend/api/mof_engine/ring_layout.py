@@ -75,6 +75,13 @@ class RingLayout:
 
         if len(shared) >= 2:
             p, q = shared[0], shared[1]
+
+            # p and q are the shared edge (a fixed chord of this ring's
+            # circle). Any circle of our known `radius` passing through
+            # both p and q must have its center somewhere on the
+            # perpendicular bisector of that chord, so build that
+            # bisector first: midpoint (mx, my) plus a unit vector
+            # perpendicular to p->q.
             mx, my = (p.x + q.x) / 2, (p.y + q.y) / 2
             dx, dy = q.x - p.x, q.y - p.y
             d = math.hypot(dx, dy)
@@ -82,6 +89,11 @@ class RingLayout:
                 d = 1e-6
             perp_x, perp_y = -dy / d, dx / d
 
+            # Distance from the midpoint to the center, h, comes from
+            # the right triangle formed by the radius, half the chord,
+            # and the bisector: radius^2 = half_chord^2 + h^2. There are
+            # two solutions (center on either side of the chord) - c1
+            # and c2 below - since either is geometrically valid.
             half_chord = d / 2
             h_sq = radius * radius - half_chord * half_chord
             h = math.sqrt(h_sq) if h_sq > 0 else 0.0
@@ -89,10 +101,20 @@ class RingLayout:
             c1 = (mx + perp_x * h, my + perp_y * h)
             c2 = (mx - perp_x * h, my - perp_y * h)
 
+            # Pick whichever center is farther from the neighboring
+            # ring's reference point, so this ring bulges away from its
+            # neighbor instead of overlapping back onto it.
             d1 = math.hypot(c1[0] - ref_x, c1[1] - ref_y)
             d2 = math.hypot(c2[0] - ref_x, c2[1] - ref_y)
             cx, cy = c1 if d1 > d2 else c2
 
+            # Walk the ring starting at p, placing one vertex every
+            # `step` degrees around (cx, cy). The sign of `step` (which
+            # rotational direction from p reaches q) is picked below by
+            # testing both directions and keeping whichever lands
+            # closest to q's actual angle - going the wrong way would
+            # put q on the opposite side of the circle from where it's
+            # already fixed.
             start_idx = ring.index(p)
             ordered = ring[start_idx:] + ring[:start_idx]
             p_angle = math.degrees(math.atan2(p.y - cy, p.x - cx))
@@ -114,6 +136,11 @@ class RingLayout:
                 atom.x = cx + radius * math.cos(angle)
                 atom.y = cy + radius * math.sin(angle)
         else:
+            # Only one atom is already fixed (spiro-style fusion, a
+            # single shared vertex rather than a shared edge), so there's
+            # no chord to solve against - just place the new ring's
+            # center one radius away from that atom, in the direction
+            # pointing away from the neighboring ring's reference point.
             shared_atom = shared[0] if shared else None
             if shared_atom is None:
                 return

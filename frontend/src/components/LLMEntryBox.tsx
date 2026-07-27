@@ -2,6 +2,14 @@
 import { Input } from "antd";
  
 // Create an interface for type safety
+//
+// NOTE: `response`, `setResponse`, and `setLoading` are required here
+// and are passed in by ChemApp, but this component never actually reads
+// or calls them (only `query`, `onQueryChange`, `loading`,
+// `onSubmit`/`onSubmitData`/`onSubmitWithData` are destructured below).
+// Looks like these were used in an earlier version and left in the
+// prop contract — harmless as-is, but they could be dropped from both
+// this interface and the ChemApp call site if they're truly unneeded.
 interface LLMEntryProps {
   query: string;
   onQueryChange: (newQuery: string) => void;

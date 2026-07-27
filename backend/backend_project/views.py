@@ -10,6 +10,15 @@ logger = logging.getLogger(__name__)
 def frontend(request):
     """
     Serve the React SPA index.html for all non-API routes.
+
+    `render(request, "index.html")` below works because settings.py's
+    TEMPLATES["DIRS"] is set to the same React build directory computed
+    here (REACT_BUILD_DIR) — Django's template loader finds index.html
+    there directly, treating it as a (static, non-Django) template. The
+    existence check above exists purely to fail with a clear error
+    message pointing at the expected path if the frontend hasn't been
+    built yet, rather than letting Django's template loader raise its
+    own less specific "template not found" error.
     """
     # Calculate React build path dynamically
     react_build_dir = Path(settings.BASE_DIR.parent) / "frontend" / "dist"

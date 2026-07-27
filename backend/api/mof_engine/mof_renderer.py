@@ -115,14 +115,28 @@ _PURE_ION_FRAGMENT_RE = re.compile(r"^(\[[^\[\]]+\])+$")
 
 
 def _split_identifier_fragments(identifier):
+    """Splits a dot-separated MOF identifier (metal(s) + linker, e.g.
+    '[Cu][Cu].c1ccc(...)cc1') into its component SMILES fragments."""
     return [f for f in identifier.split(".") if f.strip()]
 
 
 def _is_pure_ion_fragment(fragment):
+    """True if a fragment is nothing but bracket-atom ions (e.g. '[Cu]'
+    or '[Cu][Cu]') with no organic linker structure in it."""
     return bool(_PURE_ION_FRAGMENT_RE.match(fragment.strip()))
 
 
 def _select_linker_fragment(identifier):
+    """
+    Picks which fragment of a composite identifier is the actual
+    organic linker to render (as opposed to the metal ion fragments
+    that make up the rest of the formula). Fragments that are pure ions
+    are excluded outright; among what's left, the fragment that parses
+    to the most atoms wins, on the assumption that the real linker is
+    the largest organic piece — this matters because some identifiers
+    contain multiple non-ion fragments (e.g. a linker plus a solvent
+    molecule) and only the linker should be drawn.
+    """
     fragments = _split_identifier_fragments(identifier)
     candidates = [f for f in fragments if not _is_pure_ion_fragment(f)]
     if not candidates:
@@ -140,6 +154,21 @@ def _select_linker_fragment(identifier):
 
 
 def _lookup_mof(linker_smiles, metal):
+    """
+    Finds (LCD, PLD) pore dimensions for a linker+metal pair by trying
+    progressively looser matches against MOF_DB, since the exact
+    identifier string used elsewhere in the app doesn't always match
+    the DB's key formatting:
+      1. The linker SMILES alone, in case it's already a full DB key.
+      2. A few common ways of combining it with the metal as a
+         dot-separated formula (metal first/last, single/double metal).
+      3. Any DB key that contains the linker SMILES as a substring and
+         lists this metal among its compatible metals — preferring the
+         shortest such key, on the assumption that a shorter matching
+         key is a closer/more specific match than a longer one that
+         merely happens to contain the same substring.
+    Returns None if nothing matches by any of these.
+    """
     if linker_smiles in MOF_DB:
         return MOF_DB[linker_smiles][:2]
 
@@ -293,6 +322,17 @@ class MOFRenderer:
         return requested_scale * fit, MAX_CANVAS_WIDTH, MAX_CANVAS_HEIGHT
 
     def _center_linker(self):
+        """
+        Orients the linker so its longest atom-to-atom span runs
+        horizontally, then centers it on the origin. The rotation step
+        finds the two atoms farthest apart (an approximation of the
+        molecule's principal axis, cheap to compute and good enough for
+        a schematic diagram) and rotates the whole molecule by the
+        negative of that pair's angle so the span lies along the x-axis.
+        This keeps linkers drawn consistently "lying down" across the
+        square SBU and cube panels, rather than at whatever arbitrary
+        angle the layout engine's DFS happened to produce.
+        """
         atoms = self.linker_mol.atoms
         if not atoms:
             return
@@ -650,13 +690,24 @@ class MOFRenderer:
         true_ion_px      = ionic_ang        * px_per_ang
 
         if effective_ang > self._pore_fit_ang:
+            # Ion doesn't actually fit the pore — draw it deliberately
+            # oversized (1.4x true scale) relative to the pore so the
+            # "too large" mismatch is visually obvious, rather than
+            # drawing it at true scale where it might look plausible.
             display_hydrated = true_hyd_px * 1.4
             display_ion      = true_ion_px * 1.4
         else:
+            # Ion fits — shrink it below true scale (GUEST_DISPLAY_SCALE)
+            # so it doesn't visually dominate/obscure the linker struts
+            # around it.
             display_hydrated = true_hyd_px * GUEST_DISPLAY_SCALE
             display_ion      = true_ion_px * GUEST_DISPLAY_SCALE
 
         if display_ion < GUEST_MIN_DISPLAY_PX:
+            # Very small ions (e.g. Li+) would otherwise render as a
+            # near-invisible dot; grow both the ion and its hydration
+            # shell by the same amount so the shell doesn't end up
+            # smaller than the (now-enlarged) bare ion inside it.
             grow = GUEST_MIN_DISPLAY_PX - display_ion
             display_ion += grow
             if display_hydrated > 0:
