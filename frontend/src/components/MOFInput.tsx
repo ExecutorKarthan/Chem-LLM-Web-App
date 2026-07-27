@@ -1,3 +1,16 @@
+// MOFInput.tsx
+//
+// The metal/linker dropdown pair supports two independent selection
+// orders (metalFirst vs. linkerFirst, via the Radio.Group), because a
+// user might reasonably want to start from either "I have this metal,
+// what can it bond to" or "I have this linker, what metals fit it".
+// Whichever one is picked first is unconstrained (populated from the
+// full allMetals/allLinkers list); the second dropdown is then filtered
+// down to only the options actually compatible with the first pick, via
+// a round trip to /api/mof-filter/ (see the second useEffect below).
+// Switching modes resets both selections rather than trying to
+// reconcile a metal-first choice with a linker-first choice.
+
 import React, { useState, useEffect } from "react";
 import { Select, Button, Switch, Alert, Radio, Form } from "antd";
 import axios from "axios";
@@ -36,6 +49,10 @@ export const MOFInput: React.FC<MOFInputProps> = ({
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Fetch the full metal/linker/guest-ion catalogs once on mount. Both
+  // the "all" and "filtered" state for metals/linkers start out
+  // identical — filtering only narrows one of them once the other side
+  // has a selection (see the effect below).
   useEffect(() => {
     axios.get(`${BACKEND_URL}/api/mof-meta/`).then((res) => {
       setGuestIons(res.data.guest_ions || []);
@@ -47,6 +64,12 @@ export const MOFInput: React.FC<MOFInputProps> = ({
     }).catch(() => setError("Failed to fetch initial database."));
   }, []);
 
+  // Re-derives the *other* dropdown's options whenever the current
+  // mode's driving selection changes. In metalFirst mode that's
+  // filteredLinkers reacting to selectedMetal; in linkerFirst mode it's
+  // filteredMetals reacting to selectedLinker. Clearing the driving
+  // selection resets the other list back to the unfiltered full catalog
+  // rather than an empty one.
   useEffect(() => {
     if (searchMode === "metalFirst") {
       if (!selectedMetal) {
@@ -71,6 +94,11 @@ export const MOFInput: React.FC<MOFInputProps> = ({
     }
   }, [selectedMetal, selectedLinker, searchMode]);
 
+  // Clears both selections and their downstream state (readout panel,
+  // Skulpt canvas, linker name display) — used both by the explicit
+  // Reset button and when switching search modes, since a metal/linker
+  // pair chosen under one mode isn't necessarily still valid input
+  // under the other.
   const handleReset = () => {
     setSelectedMetal(undefined);
     setSelectedLinker(undefined);
@@ -81,6 +109,10 @@ export const MOFInput: React.FC<MOFInputProps> = ({
     if (onLinkerSelect) onLinkerSelect("");
   };
 
+  // Sends the current metal/linker/guest-ion/simple-mode selection to
+  // the backend, which resolves it to a specific MOF entry and returns
+  // Python source for Skulpt to run (see views.generate_mof_code) plus
+  // the pore-fit readout data to display alongside it.
   const handleGenerate = async () => {
     if (!selectedMetal || !selectedLinker) return;
     setLoading(true);
@@ -112,6 +144,11 @@ export const MOFInput: React.FC<MOFInputProps> = ({
               <Select showSearch value={selectedMetal} onChange={(v) => { setSelectedMetal(v); setSelectedLinker(undefined); onLinkerNameUpdate(""); }} options={allMetals} />
             </Form.Item>
             <Form.Item label="Organic Structural Linker">
+              {/* onChange does three things: records the pick, notifies the
+                  parent (for the SMILES-preview panel), and separately
+                  re-queries mof-filter/ for this exact metal+linker pair
+                  to get its display common name (mof-filter/'s response
+                  differs by which params are passed — see views.py). */}
               <Select showSearch value={selectedLinker} disabled={!selectedMetal} options={filteredLinkers} onChange={(v) => { setSelectedLinker(v); if (onLinkerSelect) onLinkerSelect(v); axios.get(`${BACKEND_URL}/api/mof-filter/`, { params: { metal: selectedMetal, linker: v } }).then(res => onLinkerNameUpdate(res.data.common_name || "")); }} />
             </Form.Item>
           </>

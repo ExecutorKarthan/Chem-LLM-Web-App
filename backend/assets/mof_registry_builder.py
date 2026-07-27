@@ -1,3 +1,17 @@
+"""
+Offline, one-time (or run-when-MOF_data.csv-changes) builder script —
+not imported by the Django app at runtime. Reads the raw MOF_data.csv
+formula list, classifies each dot-separated component of every formula
+as a metal, an organic linker, or an ignorable guest species (solvent/
+counter-ion), and restricts the output to mono-metal + mono-linker
+MOFs only (multi-metal or multi-linker rows are skipped, since the
+frontend dropdowns model a MOF as one metal + one linker choice).
+Looks up each unique linker's common name via PubChem, then writes two
+CSVs — registry_by_linkers.csv and registry_by_metals.csv — which
+mof_index.py loads at Django startup to answer "what linkers are valid
+for this metal" (and vice versa) without hitting PubChem or re-parsing
+MOF_data.csv on every request.
+"""
 import csv
 import os
 import re
@@ -48,6 +62,13 @@ def classify_fragment(fragment: str):
 
 
 def get_pubchem_common_name(smiles):
+    """
+    Looks up a linker's common/trivial name via PubChem by SMILES,
+    preferring the first synonym (typically the most recognizable name)
+    and falling back to the IUPAC name if no synonym is listed. Returns
+    "" (not None) on any lookup failure or missing name, so callers can
+    always write a string into the output CSV without a None check.
+    """
     if not smiles or not smiles.strip():
         return ""
     try:
@@ -63,6 +84,13 @@ def get_pubchem_common_name(smiles):
 
 
 def build_registries():
+    """
+    Main pipeline, in three steps (see the print statements below for
+    where each starts): parse MOF_data.csv into per-linker and
+    per-metal registries (mono-metal/mono-linker rows only), fetch each
+    unique linker's common name from PubChem once and cache it, then
+    write both registry CSVs.
+    """
     if not os.path.exists(SOURCE_CSV):
         print(f"Missing {SOURCE_CSV}")
         return

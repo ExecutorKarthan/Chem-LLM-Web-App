@@ -1,5 +1,13 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # ION RADII TABLE
+#
+# Effective ionic radii (Shannon radii, bare ion) and estimated hydrated
+# radii for common MOF guest ions, used by mof_renderer to judge whether
+# a given ion fits a MOF's pore and to size the drawn guest ion/hydration
+# shell. "Experimentally Verified" entries come from published Shannon
+# radii measurements; "Estimated / Unverified" entries are extrapolated
+# from periodic trends for ions without a directly measured value.
+#
 # Format: symbol -> (ionic_radius_A, hydrated_radius_A, verification)
 # ─────────────────────────────────────────────────────────────────────────────
 ION_DATA = {
@@ -66,4 +74,11 @@ ION_DATA = {
 }
 
 def get_ion_metadata(symbol):
-    return ION_DATA.get(symbol, {"ionic": None, "hydrated": None, "source": "estimated"})
+    """
+    Returns (ionic_radius_A, hydrated_radius_A, verification) for a
+    known guest ion symbol, or (None, None, "estimated") if the symbol
+    isn't in ION_DATA — kept as a 3-tuple in both cases so every caller
+    (views.py, mof_renderer.py) can safely index the result positionally
+    with [0]/[1]/[2] regardless of whether the ion was recognized.
+    """
+    return ION_DATA.get(symbol, (None, None, "estimated"))

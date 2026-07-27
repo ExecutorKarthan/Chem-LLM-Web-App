@@ -20,6 +20,9 @@ class RingFinder:
         self.mol = mol
 
     def find_rings(self):
+        """Returns the molecule's SSSR as a list of rings, each a list
+        of atoms in traversal order. See class docstring for the
+        approach and why it replaced the old DFS back-edge method."""
         candidate_rings = []
         for bond in self.mol.bonds:
             ring = self._shortest_ring_through_bond(bond)

@@ -36,6 +36,24 @@ from ion_registry import get_ion_metadata
 # Set up logger
 logger = logging.getLogger(__name__)
 
+# ── Gemini auth pattern used throughout this file ──────────────────────────
+# The frontend never holds the user's raw Gemini API key after the initial
+# submit. `tokenize_key` exchanges it for a random UUID, stores the real key
+# server-side in Django's cache keyed by that UUID, and sends the UUID back
+# as an httponly `gemini_token` cookie. Every subsequent Gemini-calling view
+# below repeats the same three steps: read `gemini_token` from the cookie,
+# look up the real key in `cache`, then call the Gemini SDK with it. This
+# keeps the actual API key out of client-side JS and out of every request
+# body after the first one.
+#
+# ── Model fallback pattern ──────────────────────────────────────────────────
+# `ask_gemini`, `prime_gemini`, and `ask_gemini_with_data` each try the same
+# ordered list of models, falling through to the next one on quota exhaustion
+# or a transient network/server error, and retrying the same model a couple
+# times first on a transient "UNAVAILABLE" server error. This trades a bit of
+# latency in the worst case for not surfacing a hard failure to the user just
+# because the current default model is temporarily over quota.
+
 # Locate assets folder safely relative to backend directory structure
 MOF_DATA_CSV_PATH = Path(settings.BASE_DIR) / "assets" / "MOF_data.csv"
 
@@ -58,6 +76,9 @@ def get_csrf_token(request):
 # Cookie existence check
 ############################################
 def check_cookie(request):
+    """Debug endpoint: reports whether a gemini_token cookie is present
+    on the request and whether that token still resolves to a cached
+    API key, without exposing the key itself in the response."""
     logger.info("=" * 80)
     logger.info("[CHECK_COOKIE] Checking for gemini_token cookie")
 
@@ -84,6 +105,15 @@ def check_cookie(request):
 @csrf_exempt
 @ensure_csrf_cookie
 def tokenize_key(request):
+    """
+    Exchanges a raw Gemini API key (sent once, in the POST body) for an
+    opaque token: generates a UUID, stores {uuid: api_key} in Django's
+    cache for 90 minutes, and sets that UUID as an httponly cookie. See
+    the module-level note above on why this indirection exists. Also
+    round-trips a cache write/read before storing the real key, so a
+    misconfigured cache backend fails loudly here instead of silently
+    later when some other view tries to look the token up.
+    """
     logger.info("=" * 80)
     logger.info("[TOKENIZE] Starting tokenization process")
     logger.info(f"[TOKENIZE] Request method: {request.method}")
@@ -223,6 +253,16 @@ def test_api_key(request):
 @csrf_exempt
 @api_view(["POST"])
 def ask_gemini(request, max_retries=2, delay=2):
+    """
+    Sends `prompt` to Gemini using the API key resolved from the
+    caller's gemini_token cookie (see module-level auth note). Tries
+    each model in `model_names` in order; within a model, retries up
+    to `max_retries` times with exponential backoff (`delay * 2**attempt`)
+    only on a transient "UNAVAILABLE" server error, and falls through to
+    the next model immediately on quota exhaustion or a network-level
+    error. An invalid API key or a non-transient client error is
+    reported back to the caller right away rather than retried.
+    """
     logger.info("=" * 80)
     logger.info("[ASK_GEMINI] ========== NEW REQUEST ==========")
 
@@ -540,6 +580,9 @@ def ask_gemini_with_data(request, max_retries=2, delay=2):
 @csrf_exempt
 @api_view(["POST"])
 def clear_token(request):
+    """Logs the user out of Gemini: deletes the cached API key (if the
+    gemini_token cookie is present and still resolves to one) and
+    clears the cookie itself from the response."""
     logger.info("=" * 80)
     logger.info("[CLEAR_TOKEN] Request received")
 
@@ -617,6 +660,14 @@ def _build_mof_data_source():
 
 
 def _mof_data_source_cached():
+    """
+    Returns the generated `mof_data.py` source, regenerating it from
+    MOF_data.csv only when the CSV's mtime has changed since the last
+    call. This avoids re-parsing and re-serializing the whole CSV on
+    every request to `get_mof_engine_file` for "mof_data.py" (which the
+    Skulpt frontend fetches on every MOF render), while still picking
+    up edits to the CSV without needing a server restart.
+    """
     if not MOF_DATA_CSV_PATH.is_file():
         raise FileNotFoundError(f"MOF_data.csv not found at {MOF_DATA_CSV_PATH}")
     current_mtime = MOF_DATA_CSV_PATH.stat().st_mtime
@@ -753,6 +804,16 @@ def filter_mofs_dropdown(request):
         
 @api_view(["POST"])
 def generate_mof_code(request):
+    """
+    Resolves the requested metal+linker combination to a known MOF
+    entry, then returns a small Python source string (not run here) that
+    the frontend hands to Skulpt to execute in-browser via
+    `mof_renderer.draw_lattice(...)`. The values below are inlined as
+    literals directly into that string, since Skulpt runs it as
+    standalone script text with no way to receive Python objects from
+    the Django side. Also returns the pore/guest-ion readout data
+    alongside it so the frontend doesn't need a second round trip.
+    """
     metal = request.data.get("metal")
     linker = request.data.get("linker")
     guest_ion = request.data.get("guest_ion")

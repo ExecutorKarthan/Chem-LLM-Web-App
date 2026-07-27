@@ -5,6 +5,15 @@ from coordination_geometry import CoordinationGeometry
 
 
 class LayoutEngine:
+    """
+    Computes 2D coordinates for every atom in `mol`. Rings and chains
+    are placed together in a single DFS sweep (see `layout_from_atom`),
+    fused rings are grouped into rigid clusters so force relaxation
+    can't distort their geometry, and any metal centers get their
+    coordination geometry corrected as a final pass. See `layout()`
+    for the full pipeline order.
+    """
+
     def __init__(self, mol):
         self.mol = mol
         self.visited = set()
