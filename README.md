@@ -22,10 +22,10 @@ The app utilizes Google's Gemini API to send queries to and receive replies from
 
 Due to its reliance on Gemini, the app requires the user to have a valid Gemini API key. These can be gotten free of charge here: [https://makersuite.google.com/app/apikey](https://makersuite.google.com/app/apikey)  
 
-The app also needs to allow the user to write and execute code in Python. This is done through the use of the Monaco Editor [https://microsoft.github.io/monaco-editor/](https://microsoft.github.io/monaco-editor/) and a Skulpt Display [https://skulpt.org/](https://skulpt.org/). Monaco is a module that creates editor objects in React that serves as an IDE-like text environment, making it user-friendly. Skulpt is a module that compiles Python into JavaScript, thus converting the inputted Python code into a Javascript form that can be run in the web browser.
+The app also needs to generate two and three dimensional diagrams of Metal Organic Framworks (MOFs) for teaching purposes. To do this, Python is used to convert a submitted SMILES formula of an organic linker as well as a metal into Python code so the models can be drawn using Python's Turtles. The code to produce the drawings was developed for this project and resides on the Django server side of this application. However, to execute and display the Turtle drawing, a Skulpt Display [https://skulpt.org/](https://skulpt.org/) is used. Skulpt is a module that compiles Python into JavaScript, thus converting the inputted Python code into a Javascript form that can be run in the web browser.
 
 A macro view of the interactions of this app can be seen in this diagram:
-![App Interaction Overview](./assets/Complete-Web-LLM-Diagram.png)
+![App Interaction Overview](./assets/Complete-Web-LLM-Diagram.svg)
 
 ### React Frontend Orientation
 The first page of the app is a "splashgate" that prevents users from interacting with the main page until two pieces of data are collected. 
@@ -34,43 +34,23 @@ Firstly, the terms and conditions of the app must be agreed to. This app is mean
 
 Secondly, any interaction with an LLM in this app requires an API key. This API key is also required for access beyond the splashgate. This key is not as required as the agreement to the terms and conditions, since a non-functional key will result in an LLM return error - so access to the LLM would still be barred. **Please Note - ** The API key is tokenized by the Django server and cached in the browser. The API key is hidden via the token, but will only be cleared after 1 hour or when the user manually clears their browser cache.
 
-Once beyond the splashgate, the main App has four sections as seen in this diagram:
-![LLM Web App Layout Diagram](./assets/LLM-App-Diagram.png)
+Once beyond the splashgate, the main App has four sections. These sections can change depending on the mode it is set in. If set in the "MOF Explorer" mode, the App appears like the following digram:
+![LLM Web App Layout Diagram MOF Explorer](./assets/LLM-App-Diagram-MOF-Explorer.png)
 
-The "LLM Entry Box" is where you can type your query that will be sent to some version of Gemini. Your query can be structured in any form of text, but must be text as there is no way to submit any other medium via the app. The "Submit request" button will take the text entered in the box and send it to the Django backend server. The Django server will then retrieve the user's API key with the user's token, then forwards that API key and the submitted text to the Gemini LLM. 
+If set in the "Linker Viewer" mode, the App appers like:
+![LLM Web App Layout Diagram Linker Viewer](./assets/LLM-App-Diagram-Linker-Viewer.png)
 
-Once the LLM responds to the Django server, that response is then forwarded to the React frontend. Assuming the response is Python code, the frontend will process it by removing code explanations provided by the LLM and it will add needed formatting so the code will be recognized as valid Python code. This finalized text is then displayed in the "LLM Response Box". This interaction is modeled here:
-![Gemini Query App Interaction Image](./assets/Gemini-Query.png)
+The "LLM Entry Box" is where you can type your query that will be sent to some version of Gemini. Your query can be structured in any form of text, but must be text as there is no way to submit any other medium via the app. The "Submit request" button will take the text entered in the box and send it to the Django backend server. You may also submit known MOF data to the LLM or a query along with the known data using the "Submit data to LLM" and "Submit request with data" buttons respectively. The Django server will then retrieve the user's API key with the user's token, then forwards that API key along with any submitted text or data to the Gemini LLM. 
 
-After text is displayed in the response box, a button will be made available that allows the finalized code to be copied directly to the "Python Code Editor" - the box on the lower left.
+Once the LLM responds to the Django server, that response is then forwarded to the React frontend. This response text is then displayed in the "LLM Response Box". This interaction is modeled here:
+![Gemini Query App Interaction Image](./assets/Gemini-Query.svg)
 
-The "Python Code Editor" is the Monaco code editor object, thus providing a clean way for users to view the LLM generated code and edit it if necessary. The editor will accept code from other sources as well, so a user could just type in their own code or copy it from a **verified and trusted** source. 
+#####ADD HERE FOR REST OF STUFF###
 
 To the right of the "Python Code Editor", is the "Skulpt Display". This display has a "Run Code" button to execute code that appears in the "Python Code Editor". This is done totally in the web browser, as seen in this illustration:
 ![Run Code App Interaction Image](./assets/Run-Code.png)
 
-Below the "Run Code" button is a bank of buttons that each correspond to a different maze. They are organized by:
 
-| Size   | Description    |
-|--------|----------------|
-| Small  | 5 x 5 grid     |
-| Medium | 10 x 10 grid   |
-| Large  | 20 x 20 grid   |
-
-| Complexity | Description                                                                                                                   |
-|------------|-------------------------------------------------------------------------------------------------------------------------------|
-| Linear     | Has a direct path from the start (green) square to the ending (gold) square                                                   |
-| Branched   | Has a direct path from start (green) to ending (gold) **and** a path that dead ends                                            |
-| Gated      | Has a direct path from start (green) to ending (gold), a dead-end path, **and** a gate (black square) that blocks passage unless the turtle first touches the key (silver square) |
-
-__Solved mazes__ - Solved mazes, one of each complexity, all medium (10 x 10) in size. Designed for user or LLM reference.                     
-
-When clicked, each button will populate the code needed to draw the maze in the "Python Code Editor" and cause an image of the corresponding maze to appear in the "Skulpt Display". That interaction is shown here:
-![Maze-Button App Interaction Image](./assets/Maze-button.png)
-
-Below all the buttons, the graphical output area can be found - displaying the graphical output of the executed code in the "Python Code Editor" . 
-
-Below the graphical output area is the text output area - displaying the text output of the executed code in the "Python Code Editor".
 
 ### Django Backend Orientation
 The tokenization of the user's API key, as well as the interaction between the Gemini LLM and this app, is handled by a Python Django server. It is demonstrated here:
@@ -89,7 +69,7 @@ No installation is required. This app is hosted on Render and can be accessed th
 This product is protected by a [MIT License](http://choosealicense.com/licenses/mit), specifically:
 MIT License
 
-Copyright (c) [2025] [Joseph Alexander Messina]
+Copyright (c) [2026] [Joseph Alexander Messina]
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -110,7 +90,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ## Contributing
-I, Alex Messina, am the primary author of this code. Its layout and interface was designed by me with suggestions and feedback provided by the members of the Washington University - Kantaros Lab. Special thanks to Jackson Cox and Shubham Natraj for sharing their technical expertise with the educational resources produce to go along with this app. This app's creation was funded by the National Science Foundation's grant, Division of Computer and Network Systems - grant #2231257 (NSF CNS #2231257). The interface is supported by Ant Design [https://ant.design/](https://ant.design/) and its LLM interactions are handled by Google's large language Gemini models through their API [https://ai.google.dev/gemini-api/docs](https://ai.google.dev/gemini-api/docs). 
+I, Alex Messina, am the primary author of this code. Its layout and interface was designed by me with suggestions and feedback provided by the members of the Washington University - Zheng Lab. This app's creation was funded by Washington University and the Zheng Lab. The interface is supported by Ant Design [https://ant.design/](https://ant.design/) and its LLM interactions are handled by Google's large language Gemini models through their API [https://ai.google.dev/gemini-api/docs](https://ai.google.dev/gemini-api/docs). Two dimensional structural images, as well as linker common names, are provided by the RDKit through their API [https://www.rdkit.org/](https://www.rdkit.org/).
  
 ## Tests
 No automated tests have been implemented at this time.
