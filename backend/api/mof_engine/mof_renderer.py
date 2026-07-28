@@ -79,27 +79,39 @@ GUEST_PX_PER_ANGSTROM = 54.0
 HYDRATION_SHELL_COLOR = "#4A90D9"
 HYDRATION_SHELL_OUTLINE = "#2A6099"
 
-# Extra horizontal breathing room between the square-SBU panel and the cube panel.
+# Extra vertical breathing room between the square-SBU panel and the cube
+# panel, now that they're stacked (square on top, cube below) instead of
+# side by side.
 PANEL_GAP_PX = 70
+
+# Space reserved above the square panel for its label text
+# ("Square SBU [Metal4]"). The cube panel's own label sits in the gap
+# between the two panels instead (see _footprint_at_scale/_render), so
+# it doesn't need a separate reservation as long as PANEL_GAP_PX stays
+# comfortably larger than one line of label text.
+LABEL_MARGIN_PX = 40
 
 # How far back the cabinet-projection back face sits.
 DEPTH_STRUT_FACTOR = 1.55
 
 # ── Canvas auto-fit ──────────────────────────────────────────────────────
-# The square SBU panel and the cube panel are drawn side by side, and their
-# combined width scales directly with the linker's own (now geometrically
-# correct, post-layout-fix) bounding box - a big multi-ring linker is
-# legitimately bigger on screen than a small one. Rather than fixing one
-# canvas size and letting large structures run off-page, we size the
-# canvas to the structure (within a sensible min/max) and, only once a
-# structure is too big even for the max canvas, scale the whole drawing
-# down so it still fits. See MOFRenderer._auto_fit() / _footprint_at_scale().
+# The square SBU panel is stacked above the cube panel, and both scale
+# directly with the linker's own (now geometrically correct, post-
+# layout-fix) bounding box - a big multi-ring linker is legitimately
+# bigger on screen than a small one. We size the canvas to the structure
+# (within a sensible min/max): a structure too big even for the max
+# canvas gets scaled down (never below MIN_AUTO_SCALE) so it still fits,
+# and a structure that comfortably fits with room to spare gets scaled up
+# (never above MAX_AUTO_SCALE) so it actually uses the available canvas
+# instead of sitting shrink-wrapped and small inside a much bigger
+# container. See MOFRenderer._auto_fit() / _footprint_at_scale().
 MIN_CANVAS_WIDTH  = 520.0
 MIN_CANVAS_HEIGHT = 380.0
 MAX_CANVAS_WIDTH  = 950.0
 MAX_CANVAS_HEIGHT = 620.0
 CANVAS_MARGIN_PX  = 50.0   # breathing room added around the measured footprint
 MIN_AUTO_SCALE    = 0.35   # never shrink a structure below this fraction
+MAX_AUTO_SCALE    = 2.5    # never grow a structure beyond this multiple of its requested scale
 
 # ─────────────────────────────────────────────────────────────────────────────
 # DERIVED — do not edit these
@@ -204,10 +216,15 @@ class MOFRenderer:
         self.cy           = cy
         self.guest_ion    = guest_ion
 
-        if mof_id and mof_id in MOF_DB:
-            self.data = MOF_DB[mof_id]
-        else:
-            self.data = self._fuzzy_lookup(metal, linker_smiles)
+        # NOTE: MOF_DB lookup by (metal, linker) happens once, correctly,
+        # in the "Step 4: pore data" block below via the module-level
+        # _lookup_mof(linker_smiles, metal) — there used to be a second,
+        # earlier attempt at this same lookup here that called a
+        # self._fuzzy_lookup(...) method that was never defined on this
+        # class (an AttributeError waiting to happen on any mof_id miss),
+        # and whose result (self.data) was never actually read anywhere.
+        # Removed as dead code rather than fixed, since Step 4 already
+        # does this job.
 
         # ── Step 1: parse and layout linker (scale-independent) ───────────
         render_smiles = _select_linker_fragment(linker_smiles)
@@ -277,9 +294,19 @@ class MOFRenderer:
     def _footprint_at_scale(self, scale, metal):
         """
         Re-derives just the sizes needed to estimate the total on-screen
-        footprint (square SBU panel + cube panel, side by side) at a given
-        scale, without touching self or the turtle. Mirrors the same
-        formulas _render()/_draw_cube() use for panel placement.
+        footprint (square SBU panel stacked above the cube panel) at a
+        given scale, without touching self or the turtle. Mirrors the
+        same formulas _render()/_draw_cube() use for panel placement.
+
+        The cube panel isn't symmetric around its own center the way the
+        square panel is: _cube_corners() offsets the back face by
+        (dx, dy) from the front face, so the cube's true bounding box
+        extends dx further to the right and dy further upward than a
+        flat square of the same side length would. That asymmetry has to
+        be counted here (and mirrored in _render()'s cube positioning),
+        or the canvas gets sized/positioned as if the cube were as
+        compact as the square and the far side of the cube ends up
+        clipped.
         """
         mol_scale = LINKER_ATOM_SCALE * scale
         atom_pad = max(BASE_RADII.values()) * mol_scale
@@ -288,31 +315,62 @@ class MOFRenderer:
         metal_r = max(BASE_RADII.get(metal, 28) * mol_scale * 2.2, 14 * scale)
         sq_size = linker_half_w * 2 + 2 * metal_r
 
-        panel_half_w = sq_size / 2 + metal_r + linker_half_h
-        gap = max(sq_size * 0.45, PANEL_GAP_PX * scale)
+        h = sq_size / 2
+        dx = sq_size * 0.38 * DEPTH_STRUT_FACTOR
+        dy = sq_size * 0.28 * DEPTH_STRUT_FACTOR
 
-        total_width = 4 * panel_half_w + gap
-        depth_dy = sq_size * 0.28 * DEPTH_STRUT_FACTOR
-        total_height = sq_size + 2 * metal_r + depth_dy + 40  # label/margin allowance
+        # Square panel: symmetric, same padding on every side.
+        sq_half_w = h + metal_r + linker_half_h
+        sq_panel_h = 2 * (h + metal_r)
+
+        # Cube panel: right/top extents get the extra dx/dy from the
+        # back-face offset; left/bottom extents don't.
+        cube_half_w = h + dx / 2 + metal_r + linker_half_h
+        cube_panel_h = 2 * (h + metal_r) + dy
+
+        total_width = max(2 * sq_half_w, 2 * cube_half_w)
+        vgap = max(sq_size * 0.35, PANEL_GAP_PX * scale * 0.6)
+        total_height = LABEL_MARGIN_PX + sq_panel_h + vgap + cube_panel_h
 
         return total_width, total_height
 
     def _auto_fit(self, requested_scale, metal):
         """
-        Returns (final_scale, canvas_width, canvas_height). Small
-        structures get a canvas sized to fit them (within a sensible
-        min/max) at their requested scale unchanged. Structures too big
-        even for the max canvas get scaled down (never below
+        Returns (final_scale, canvas_width, canvas_height). Structures
+        too big even for the max canvas get scaled down (never below
         MIN_AUTO_SCALE) so they still fit rather than running off-page.
+        Structures that comfortably fit with room to spare get scaled up
+        (never above MAX_AUTO_SCALE) so they make use of the available
+        canvas instead of staying shrink-wrapped at their natural size
+        inside a much bigger container.
         """
         natural_w, natural_h = self._footprint_at_scale(requested_scale, metal)
         padded_w = natural_w + CANVAS_MARGIN_PX
         padded_h = natural_h + CANVAS_MARGIN_PX
 
         if padded_w <= MAX_CANVAS_WIDTH and padded_h <= MAX_CANVAS_HEIGHT:
-            canvas_w = max(MIN_CANVAS_WIDTH, padded_w)
-            canvas_h = max(MIN_CANVAS_HEIGHT, padded_h)
-            return requested_scale, canvas_w, canvas_h
+            # Fits already — scale up toward the max canvas rather than
+            # leaving it at natural size, capped at MAX_AUTO_SCALE so a
+            # small linker in a large browser window doesn't blow up into
+            # oversized atoms.
+            fill = min(
+                (MAX_CANVAS_WIDTH - CANVAS_MARGIN_PX) / natural_w,
+                (MAX_CANVAS_HEIGHT - CANVAS_MARGIN_PX) / natural_h,
+            )
+            fill = min(fill, MAX_AUTO_SCALE)
+            fill = max(fill, 1.0)  # this branch only grows, never shrinks
+            final_scale = requested_scale * fill
+
+            # Re-derive the footprint at the final scale rather than just
+            # scaling padded_w/padded_h linearly — _footprint_at_scale
+            # includes a couple of non-linear terms (a max() in the panel
+            # gap, a flat +40px label allowance), so this keeps the
+            # returned canvas size consistent with what will actually be
+            # drawn at final_scale.
+            fitted_w, fitted_h = self._footprint_at_scale(final_scale, metal)
+            canvas_w = max(MIN_CANVAS_WIDTH, min(MAX_CANVAS_WIDTH, fitted_w + CANVAS_MARGIN_PX))
+            canvas_h = max(MIN_CANVAS_HEIGHT, min(MAX_CANVAS_HEIGHT, fitted_h + CANVAS_MARGIN_PX))
+            return final_scale, canvas_w, canvas_h
 
         fit = min(
             (MAX_CANVAS_WIDTH - CANVAS_MARGIN_PX) / natural_w,
@@ -386,21 +444,45 @@ class MOFRenderer:
     # ── Internal dispatcher ───────────────────────────────────────────────────
 
     def _render(self, linker_mode, guest_in_square, guest_in_cube):
-        s   = self._sq_size
-        sq_half_w   = s / 2 + self.metal_r + self._linker_half_h
-        cube_half_w = s / 2 + self.metal_r + self._linker_half_h
+        s  = self._sq_size
+        h  = s / 2
+        dx = s * 0.38 * DEPTH_STRUT_FACTOR
+        dy = s * 0.28 * DEPTH_STRUT_FACTOR
 
-        gap = max(s * 0.45, PANEL_GAP_PX * self.scale)
+        vgap = max(s * 0.35, PANEL_GAP_PX * self.scale * 0.6)
 
-        sq_cx = self.cx - gap / 2 - sq_half_w
-        cb_cx = self.cx + gap / 2 + cube_half_w
+        sq_half_h          = h + self.metal_r
+        cube_half_h_bottom = h + self.metal_r
+        cube_half_h_top    = h + dy + self.metal_r
+
+        # Square panel above, cube panel below, split around self.cy with
+        # vgap between the square's bottom edge and the cube's top edge
+        # (which is also where the cube's own label lands — see
+        # _draw_cube — so vgap needs to stay comfortably larger than one
+        # line of label text, which PANEL_GAP_PX's default already is).
+        sq_cx, sq_cy = self.cx, self.cy + vgap / 2 + sq_half_h
+
+        # The cube's own (cx, cy) is defined as its FRONT face's center
+        # (see _cube_corners), but the back face sits dx right / dy up
+        # from that. Horizontally, that means centering the cube panel
+        # in its slot requires nudging its front-face-center left by
+        # dx/2 first — the same correction _cube_visual_center already
+        # makes for guest-ion placement, mirrored here for the panel's
+        # own bounding box (see _footprint_at_scale, which budgets width
+        # using this same averaged dx/2 half-extent). Vertically no such
+        # shift is needed: cube_half_h_top/cube_half_h_bottom already
+        # measure the true top/bottom edges directly from the front-face
+        # center, so placing cube_cy from cube_half_h_top alone lands
+        # the top edge exactly at the intended slot boundary.
+        cube_cx = self.cx - dx / 2
+        cube_cy = self.cy - vgap / 2 - cube_half_h_top
 
         if linker_mode:
-            self._draw_square(sq_cx, self.cy, s, show_guest=guest_in_square)
-            self._draw_cube(cb_cx, self.cy, s, show_guest=guest_in_cube)
+            self._draw_square(sq_cx, sq_cy, s, show_guest=guest_in_square)
+            self._draw_cube(cube_cx, cube_cy, s, show_guest=guest_in_cube)
         else:
-            self._draw_square_simple(sq_cx, self.cy, s, show_guest=guest_in_square)
-            self._draw_cube_simple(cb_cx, self.cy, s, show_guest=guest_in_cube)
+            self._draw_square_simple(sq_cx, sq_cy, s, show_guest=guest_in_square)
+            self._draw_cube_simple(cube_cx, cube_cy, s, show_guest=guest_in_cube)
 
     # ── Square SBU — linker mode ──────────────────────────────────────────────
 
@@ -961,6 +1043,7 @@ def draw_lattice(metal, linker_smiles, mof_id=None, guest_ion=None, guest_ion_me
         # position in that repaint — re-asserting it right here, as the
         # very last thing before the flush, is the reliable fix.
         try:
+            screen.tracer(1, 0)
             t.hideturtle()
         except Exception:
             pass

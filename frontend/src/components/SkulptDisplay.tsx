@@ -111,6 +111,47 @@ const SkulptDisplay: React.FC<SkulptDisplayProps> = ({ code }) => {
   const [running, setRunning] = useState(false);
   const [legendEntries, setLegendEntries] = useState<{ symbol: string; color: string }[]>([]);
 
+  // Track window-variable canvas dimensions dynamically to fill available window space
+  const [dimensions, setDimensions] = useState({ width: 950, height: 620 });
+
+  useEffect(() => {
+    const updateDimensions = () => {
+      if (canvasRef.current) {
+        const parentWidth = canvasRef.current.parentElement?.clientWidth || window.innerWidth - 80;
+        const calculatedHeight = window.innerHeight - 240;
+        setDimensions({
+          width: Math.max(400, parentWidth),
+          height: Math.max(450, calculatedHeight),
+        });
+      }
+    };
+
+    updateDimensions();
+
+    const resizeObserver = new ResizeObserver((entries) => {
+      for (let entry of entries) {
+        const { width } = entry.contentRect;
+        if (width > 0) {
+          const calculatedHeight = window.innerHeight - 240;
+          setDimensions({
+            width: width,
+            height: Math.max(450, calculatedHeight),
+          });
+        }
+      }
+    });
+
+    if (canvasRef.current?.parentElement) {
+      resizeObserver.observe(canvasRef.current.parentElement);
+    }
+
+    window.addEventListener("resize", updateDimensions);
+    return () => {
+      resizeObserver.disconnect();
+      window.removeEventListener("resize", updateDimensions);
+    };
+  }, [skulptLoaded]);
+
   // Auto-run whenever the parent pushes new code down
   const prevCodeRef = React.useRef<string>("");
   React.useEffect(() => {
@@ -119,7 +160,7 @@ const SkulptDisplay: React.FC<SkulptDisplayProps> = ({ code }) => {
       runCode();
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [code, skulptLoaded]);
+  }, [code, skulptLoaded, dimensions.width, dimensions.height]);
 
   // Re-fit and redraw (debounced) when the window/container is resized,
   // so a structure drawn on a wide window doesn't stay oversized (or
@@ -144,7 +185,7 @@ const SkulptDisplay: React.FC<SkulptDisplayProps> = ({ code }) => {
       }
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [code, skulptLoaded]);
+  }, [code, skulptLoaded, dimensions.width, dimensions.height]);
 
   // Load Skulpt from CDN once
   useEffect(() => {
@@ -186,42 +227,42 @@ const SkulptDisplay: React.FC<SkulptDisplayProps> = ({ code }) => {
   // returning a string here instead would make Skulpt treat this as a
   // (wrong) JS module.
 
-const builtinRead = (filename: string): string => {
-  // NOTE: left over from debugging module resolution — safe to remove
-  // once this is confirmed stable, but currently harmless (Skulpt's
-  // own console, not user-facing).
-  console.log("Skulpt requested:", filename);
+  const builtinRead = (filename: string): string => {
+    // NOTE: left over from debugging module resolution — safe to remove
+    // once this is confirmed stable, but currently harmless (Skulpt's
+    // own console, not user-facing).
+    console.log("Skulpt requested:", filename);
 
-  // 1. If Skulpt is checking for a JS wrapper for your custom module, 
-  // do NOT return Python code. Tell Skulpt it doesn't exist so it looks for the .py file.
-  if (filename.endsWith(".js")) {
-    const baseName = filename.replace(/^.*\//, "").replace(/\.js$/, "");
-    if (MOF_ENGINE_MODULES.has(baseName)) {
-      throw new Error(`No JS implementation for ${baseName}`);
+    // 1. If Skulpt is checking for a JS wrapper for your custom module, 
+    // do NOT return Python code. Tell Skulpt it doesn't exist so it looks for the .py file.
+    if (filename.endsWith(".js")) {
+      const baseName = filename.replace(/^.*\//, "").replace(/\.js$/, "");
+      if (MOF_ENGINE_MODULES.has(baseName)) {
+        throw new Error(`No JS implementation for ${baseName}`);
+      }
     }
-  }
 
-  // 2. Only intercept and fetch from your backend if it's explicitly a .py file
-  const baseName = filename.replace(/^.*\//, "").replace(/\.(py|js)$/, "");
+    // 2. Only intercept and fetch from your backend if it's explicitly a .py file
+    const baseName = filename.replace(/^.*\//, "").replace(/\.(py|js)$/, "");
 
-  if (filename.endsWith(".py") && MOF_ENGINE_MODULES.has(baseName)) {
-    const source = fetchMofEngineFileSync(baseName);
+    if (filename.endsWith(".py") && MOF_ENGINE_MODULES.has(baseName)) {
+      const source = fetchMofEngineFileSync(baseName);
 
-    console.log("==========");
-    console.log(baseName);
-    console.log(source.substring(0, 500));
-    console.log("==========");
+      console.log("==========");
+      console.log(baseName);
+      console.log(source.substring(0, 500));
+      console.log("==========");
 
-    return source;
-  }
+      return source;
+    }
 
-  // Fallback to Skulpt's standard library
-  if (!window.Sk.builtinFiles || !window.Sk.builtinFiles["files"][filename]) {
-    throw new Error(`File not found: '${filename}'`);
-  }
+    // Fallback to Skulpt's standard library
+    if (!window.Sk.builtinFiles || !window.Sk.builtinFiles["files"][filename]) {
+      throw new Error(`File not found: '${filename}'`);
+    }
 
-  return window.Sk.builtinFiles["files"][filename];
-};
+    return window.Sk.builtinFiles["files"][filename];
+  };
 
   const outf = (text: string) => {
     const marker = "@@LEGEND@@";
@@ -276,8 +317,10 @@ const builtinRead = (filename: string): string => {
     // Small delay so the cleared canvas div is in the DOM before Skulpt
     // measures its dimensions.
     setTimeout(() => {
-      const width = canvasRef.current?.clientWidth ?? 950;
-      const height = canvasRef.current?.clientHeight ?? 620;
+      const width = dimensions.width;
+      const height = dimensions.height;
+
+      console.log("Width:" + width, "Height:" + height);
 
       window.Sk.configure({
         output: outf,
@@ -326,19 +369,22 @@ const builtinRead = (filename: string): string => {
         )
         .then(() => {
           console.log("Success");
-          })
+        })
         .catch((err: any) => {
            // This logs the full internal Skulpt error to your Browser Developer Tools
           console.error("SKULPT FATAL ERROR:", err);
           console.error("DEBUG - Last few lines of code executed:", code.split('\n').slice(-10));
           // Alert the user with the specific error type
           alert(`Python Error: ${err.toString()}`);
+        })
+        .finally(() => {
+          setRunning(false);
         });
     }, 100);
   };
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", width: "100%" }}>
+    <div style={{ display: "flex", flexDirection: "column", width: "100%", height: "100%", flexGrow: 1 }}>
       <div style={{ marginBottom: 12 }}>
         <button
           onClick={runCode}
@@ -357,13 +403,13 @@ const builtinRead = (filename: string): string => {
       <div
         ref={canvasRef}
         style={{
-          minHeight: 380,
-          maxHeight: 640,
+          width: "100%",
+          height: `${dimensions.height}px`,
           border: "1px solid #ddd",
           borderRadius: 4,
           backgroundColor: "white",
-          width: "100%",
-          overflow: "auto",
+          overflow: "hidden",
+          position: "relative",
         }}
       />
 
