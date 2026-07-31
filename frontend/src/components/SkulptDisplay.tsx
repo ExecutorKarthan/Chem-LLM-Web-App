@@ -102,6 +102,16 @@ const ELEMENT_NAMES: Record<string, string> = {
   Y: "Yttrium", La: "Lanthanum",
 };
 
+// The canvas container's fixed height. This is deliberately a single
+// fixed value, not a measured/content-driven one — see the redesign
+// note above draw() below for why. Width is still measured live via
+// clientWidth (see draw()), since the container is width:'100%' and
+// genuinely does vary with the real available width; height doesn't
+// need the same live measurement because it's simply not driven by
+// content or viewport in this design, it's just a constant budget the
+// drawing scales to fit.
+const CANVAS_HEIGHT_PX = 640;
+
 const SkulptDisplay: React.FC<SkulptDisplayProps> = ({ code }) => {
   const outputRef = useRef<HTMLPreElement>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
@@ -276,8 +286,24 @@ const builtinRead = (filename: string): string => {
     // Small delay so the cleared canvas div is in the DOM before Skulpt
     // measures its dimensions.
     setTimeout(() => {
-      const width = canvasRef.current?.clientWidth ?? 950;
-      const height = canvasRef.current?.clientHeight ?? 620;
+      // REDESIGN NOTE: the canvas used to be sized to fit the structure
+      // (small structure -> small canvas), which needed CSS to center a
+      // possibly-smaller-than-container canvas, plus overflow:auto for
+      // the rare oversized case. That combination is exactly what broke:
+      // flexbox centering an element that overflows its container clips
+      // the *start* of the overflow in most browsers (not the end), so
+      // an oversized canvas showed its cube panel scrolled/cut off and
+      // its square panel invisible above the clipped region.
+      //
+      // Instead, the canvas is now always exactly this container's full
+      // size, and the DRAWING scales (up or down, uniformly, via
+      // mof_renderer's auto-fit) to fit inside that fixed canvas. A
+      // fixed-size canvas can't be "smaller than its container" or
+      // "overflow its container" in the first place, so there's nothing
+      // left to center or scroll — mof_renderer.py guarantees the
+      // scaled drawing fits within the exact dimensions given here.
+      const width = Math.max(canvasRef.current?.clientWidth ?? 950, 420);
+      const height = CANVAS_HEIGHT_PX;
 
       window.Sk.configure({
         output: outf,
@@ -290,34 +316,15 @@ const builtinRead = (filename: string): string => {
         height,
       };
 
-      // NOTE: this second assignment immediately overwrites the one
-      // above with equivalent values — looks like leftover debugging
-      // cruft (the comments below suggest it was added while
-      // troubleshooting a canvas-offset issue) rather than something
-      // intentionally different. Harmless as-is since the two objects
-      // are equivalent, but safe to delete if you want to trim this up.
-      window.Sk.TurtleGraphics = {
-        target: canvasRef.current,
-        width: width,
-        height: height,
-        // Pro-tip: If things look offset, adding these tells Skulpt's underlying 
-        // engine to center the coordinate context (0,0) exactly in the container midpoints.
-      };
-
-      // mof_renderer.py's auto-fit logic (MIN/MAX_CANVAS_WIDTH/HEIGHT) is
-      // otherwise a set of fixed Python constants with no idea how much
-      // room the current browser window actually has. Overriding them
-      // here — right before the generated drawing code runs — makes the
-      // structure size/scale itself against the real, current container
-      // size instead of a generic desktop-sized default. `min`/`max`
-      // guard against a window narrower/shorter than the module's normal
-      // minimum, so the fit floor never exceeds what's actually available.
+      // mof_renderer.py's auto-fit logic needs to know this exact,
+      // fixed canvas size so it can compute the one scale factor that
+      // makes the (stacked 2D+3D) structure fit inside it exactly —
+      // shrinking a too-big structure down, or growing a too-small one
+      // up, but never resizing the canvas itself.
       const sizingPreamble =
         `import mof_renderer\n` +
-        `mof_renderer.MIN_CANVAS_WIDTH = min(420.0, ${width})\n` +
-        `mof_renderer.MAX_CANVAS_WIDTH = max(${width}, 420.0)\n` +
-        `mof_renderer.MIN_CANVAS_HEIGHT = min(360.0, ${height})\n` +
-        `mof_renderer.MAX_CANVAS_HEIGHT = max(${height}, 360.0)\n`;
+        `mof_renderer.CANVAS_TARGET_WIDTH = ${width}\n` +
+        `mof_renderer.CANVAS_TARGET_HEIGHT = ${height}\n`;
       const codeToRun = sizingPreamble + code;
 
       window.Sk.misceval
@@ -357,13 +364,18 @@ const builtinRead = (filename: string): string => {
       <div
         ref={canvasRef}
         style={{
-          minHeight: 380,
-          maxHeight: 640,
+          height: CANVAS_HEIGHT_PX,
           border: "1px solid #ddd",
           borderRadius: 4,
           backgroundColor: "white",
           width: "100%",
-          overflow: "auto",
+          // No centering CSS and no overflow:auto needed anymore — the
+          // canvas Skulpt inserts is always sized to exactly fill this
+          // fixed-size div (see the REDESIGN NOTE in draw() above), so
+          // there's no size mismatch left to center and nothing that
+          // should legitimately overflow. overflow:hidden stays purely
+          // as a defensive backstop, not a normal-case behavior.
+          overflow: "hidden",
         }}
       />
 
