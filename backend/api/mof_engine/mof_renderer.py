@@ -818,25 +818,17 @@ class MOFRenderer:
         hydrated_ang = self._guest_hydrated_ang
         hydrated_ang_eff = hydrated_ang if hydrated_ang else ionic_ang
 
-        # Draw the pore's own real boundaries first, as dashed reference
-        # circles, using the SAME px-per-angstrom scale the guest ion
-        # itself uses below (self._guest_px_per_ang — a fixed,
-        # linker-independent scale, see GUEST_PX_PER_ANGSTROM's comment
-        # for why it's not derived from this panel's own drawn size).
-        # This is what makes "the guest is bigger than the pore" an
-        # honest, directly visible fact rather than an isolated size
-        # choice: an earlier version of this drew the guest at an
-        # independently chosen size (further bumped 1.4x if "too big" or
-        # shrunk to 0.6x if "fits") with no boundary circle drawn at all,
-        # so a too-big guest could still look like it had plenty of room
-        # simply because "plenty of room" was never tied to the real pore
-        # measurement in the first place.
-        cavity_r_px     = self._pore_r_ang * self._guest_px_per_ang
-        bottleneck_r_px = self._pore_fit_ang * self._guest_px_per_ang
-        self._dashed_circle(center_x, center_y, cavity_r_px, color="#999999", dash_deg=16)
-        if bottleneck_r_px < cavity_r_px:
-            self._dashed_circle(center_x, center_y, bottleneck_r_px, color="#666666", dash_deg=10)
-
+        # Deliberately no drawn pore-boundary circle here: the guest ion
+        # and hydration shell are drawn to true, honest scale (via
+        # self._guest_px_per_ang — a fixed, linker-independent scale, see
+        # GUEST_PX_PER_ANGSTROM's comment for why it's not derived from
+        # this panel's own drawn size) purely to give an accurate sense
+        # of relative size next to the linkers/metals. Whether that size
+        # actually fits through the real pore is answered by the LCD/PLD
+        # numbers in the readout panel, not by this drawing — adding an
+        # explicit boundary line here would let someone read "fits/
+        # doesn't fit" straight off the picture without ever looking at
+        # the data.
         display_hydrated = hydrated_ang_eff * self._guest_px_per_ang
         display_ion      = ionic_ang        * self._guest_px_per_ang
 
@@ -940,36 +932,6 @@ class MOFRenderer:
         t.fillcolor(fill_color)
         t.begin_fill(); t.circle(radius); t.end_fill()
         t.penup()
-
-    def _dashed_circle(self, cx, cy, radius, color="#444444", dash_deg=14):
-        """
-        Draws a dashed circle by walking in short arc segments (turtle
-        has no native dashed-stroke mode). Used for the LCD/PLD pore
-        boundary reference circles in _draw_guest_ion — see there for why
-        these need to be genuinely to-scale rather than decorative.
-        """
-        if radius <= 0:
-            return
-        t = self.t
-        t.pencolor(color)
-        t.pensize(1)
-        seg = dash_deg
-        gap = dash_deg
-        step = seg + gap
-        angle = 0.0
-        while angle < 360:
-            a0 = math.radians(angle)
-            t.penup()
-            t.goto(cx + radius * math.cos(a0), cy + radius * math.sin(a0))
-            t.pendown()
-            end_angle = min(angle + seg, 360)
-            a = angle
-            while a < end_angle:
-                a = min(a + 2, end_angle)
-                ar = math.radians(a)
-                t.goto(cx + radius * math.cos(ar), cy + radius * math.sin(ar))
-            t.penup()
-            angle += step
 
     def _write_centered(self, x, y, text, color, font_size):
         self.t.penup()
