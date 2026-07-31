@@ -56,21 +56,21 @@ BACK_LINKER_SCALE  = 0.70   # back face — furthest away, smallest
 # Fraction of the edge the linker occupies (leaves gap near metal balls).
 LINKER_INSET = 0.82
 
-# Guest ion + hydration shell display scale.
-GUEST_DISPLAY_SCALE = 0.60
-
 # Minimum on-screen radius (px) for the bare guest ion ball.
 GUEST_MIN_DISPLAY_PX = 9
 
 # Fixed angstrom-to-pixel reference for guest ion / hydration shell sizing
 # at mol_scale == 1, tied to the SAME per-atom scale factor as everything
 # else (self._mol_scale) rather than to this linker's own drawn square
-# size (_pore_r_px / _pore_fit_ang). The old approach derived px-per-Å
-# from how big THIS linker's schematic happened to be drawn, so a large
-# multi-armed linker (bigger square panel) made the exact same real ion
-# radius balloon to 1.5x+ the size it'd draw at for a small linker, with
-# nothing about the ion itself having changed. Calibrated so a typical
-# small linker at scale=1.0 draws the same size hydration shell as before.
+# size. Deriving it from the panel's own size was tried and reverted: a
+# large multi-armed linker (bigger square panel) made the exact same real
+# ion radius balloon to 1.5x+ the size it'd draw at for a small linker,
+# with nothing about the ion itself having changed. This same fixed scale
+# is also used for the dashed LCD/PLD pore-boundary reference circles
+# drawn alongside the guest ion (see _draw_guest_ion) — using one shared
+# scale for both is what makes "the guest is bigger than the real pore"
+# a genuine, visible fact rather than two independently-sized elements
+# that happen to be drawn near each other.
 GUEST_PX_PER_ANGSTROM = 54.0
 
 # Hydration shell fill/outline colors — single source of truth shared by
@@ -79,27 +79,58 @@ GUEST_PX_PER_ANGSTROM = 54.0
 HYDRATION_SHELL_COLOR = "#4A90D9"
 HYDRATION_SHELL_OUTLINE = "#2A6099"
 
-# Extra horizontal breathing room between the square-SBU panel and the cube panel.
+# Extra vertical breathing room between the square-SBU panel and the cube
+# panel, now that they're stacked (square on top, cube below) instead of
+# side by side.
 PANEL_GAP_PX = 70
+
+# Small breathing room above the square panel, purely aesthetic (no
+# label text reserves space here anymore — see _draw_square /
+# _draw_cube, which used to write a "Square SBU [Metal4]" / "MOF Cube
+# [Metal8]" label above each panel. Those were removed: the numbers
+# were just this schematic's fixed corner count (always 4 for the
+# square, always 8 for the cube) mislabeled as if it were the metal's
+# real coordination number, which has nothing to do with it and could
+# easily be read as a chemistry claim the drawing wasn't actually
+# making).
+TOP_MARGIN_PX = 15
 
 # How far back the cabinet-projection back face sits.
 DEPTH_STRUT_FACTOR = 1.55
 
 # ── Canvas auto-fit ──────────────────────────────────────────────────────
-# The square SBU panel and the cube panel are drawn side by side, and their
-# combined width scales directly with the linker's own (now geometrically
-# correct, post-layout-fix) bounding box - a big multi-ring linker is
-# legitimately bigger on screen than a small one. Rather than fixing one
-# canvas size and letting large structures run off-page, we size the
-# canvas to the structure (within a sensible min/max) and, only once a
-# structure is too big even for the max canvas, scale the whole drawing
-# down so it still fits. See MOFRenderer._auto_fit() / _footprint_at_scale().
-MIN_CANVAS_WIDTH  = 520.0
-MIN_CANVAS_HEIGHT = 380.0
-MAX_CANVAS_WIDTH  = 950.0
-MAX_CANVAS_HEIGHT = 620.0
-CANVAS_MARGIN_PX  = 50.0   # breathing room added around the measured footprint
-MIN_AUTO_SCALE    = 0.35   # never shrink a structure below this fraction
+# The canvas is always exactly CANVAS_TARGET_WIDTH x CANVAS_TARGET_HEIGHT
+# (the frontend overrides these to match the real container size — see
+# SkulptDisplay.tsx's sizingPreamble). The canvas itself is never resized
+# to match the structure; instead, the structure (square SBU panel
+# stacked above the cube panel) is scaled — uniformly, so it's never
+# stretched/distorted — to fit inside that fixed canvas: shrunk down if
+# it would otherwise be too big to fit, or grown up if it comfortably
+# fits with room to spare, so it isn't left small in a much bigger
+# canvas. See MOFRenderer._auto_fit() / _footprint_at_scale().
+#
+# Earlier versions of this instead resized the *canvas* to match the
+# structure (small structure -> small canvas) and relied on CSS to
+# center a canvas that could be smaller than its container, with
+# overflow:auto as a fallback for the rare oversized case. That
+# combination is exactly what broke: a canvas larger than its
+# container, centered via flexbox, gets its overflow clipped from the
+# *start* in most browsers (not the end) — so the top (square) panel
+# vanished while the bottom (cube) panel showed as scrolled-and-still-
+# cut-off. A fixed-size canvas can't be smaller or larger than its
+# container in the first place, which removes the failure mode
+# entirely rather than patching around it again.
+CANVAS_TARGET_WIDTH  = 950.0
+CANVAS_TARGET_HEIGHT = 620.0
+CANVAS_MARGIN_PX     = 50.0   # breathing room added around the measured footprint
+
+# MIN_AUTO_SCALE is intentionally very permissive (not a practical
+# floor): "never cut off" is an unconditional requirement now, so an
+# extremely large structure should render very small rather than clip.
+# This just guards against a literal zero/negative scale in a
+# pathological edge case.
+MIN_AUTO_SCALE = 0.05
+MAX_AUTO_SCALE = 2.5   # never grow a structure beyond this multiple of its requested scale
 
 # ─────────────────────────────────────────────────────────────────────────────
 # DERIVED — do not edit these
@@ -204,10 +235,15 @@ class MOFRenderer:
         self.cy           = cy
         self.guest_ion    = guest_ion
 
-        if mof_id and mof_id in MOF_DB:
-            self.data = MOF_DB[mof_id]
-        else:
-            self.data = self._fuzzy_lookup(metal, linker_smiles)
+        # NOTE: MOF_DB lookup by (metal, linker) happens once, correctly,
+        # in the "Step 4: pore data" block below via the module-level
+        # _lookup_mof(linker_smiles, metal) — there used to be a second,
+        # earlier attempt at this same lookup here that called a
+        # self._fuzzy_lookup(...) method that was never defined on this
+        # class (an AttributeError waiting to happen on any mof_id miss),
+        # and whose result (self.data) was never actually read anywhere.
+        # Removed as dead code rather than fixed, since Step 4 already
+        # does this job.
 
         # ── Step 1: parse and layout linker (scale-independent) ───────────
         render_smiles = _select_linker_fragment(linker_smiles)
@@ -230,12 +266,40 @@ class MOFRenderer:
         self._linker_raw_w = max(xs) - min(xs)
         self._linker_raw_h = max(ys) - min(ys)
 
-        # ── Step 2: auto-fit — decide how much to scale the whole drawing
+        # ── Step 2: pore + guest ion data (scale-independent) ──────────────
+        # Looked up before auto-fit runs (not after, as in an earlier
+        # version of this code) so that _footprint_at_scale can reserve
+        # enough room for a guest ion that's genuinely bigger than the
+        # pore — see _draw_guest_ion for why that's now drawn to true
+        # scale rather than an arbitrary fixed size.
+        if mof_id and mof_id in MOF_DB:
+            self._lcd_ang, self._pld_ang, _ = MOF_DB[mof_id]
+        else:
+            db_result = _lookup_mof(linker_smiles, metal)
+            if db_result:
+                self._lcd_ang, self._pld_ang = db_result
+            else:
+                self._lcd_ang = MOF_PORE_DIAMETER_FALLBACK
+                self._pld_ang = MOF_PORE_DIAMETER_FALLBACK * 0.75
+
+        self._pore_fit_ang = self._pld_ang / 2
+        self._pore_r_ang   = self._lcd_ang / 2
+
+        self._guest_ionic_ang    = None
+        self._guest_hydrated_ang = None
+        self._guest_verified     = None
+        if guest_ion:
+            self._guest_ionic_ang = guest_ion_metadata[0]
+            self._guest_hydrated_ang = guest_ion_metadata[1]
+            self._guest_verified = guest_ion_metadata[2]
+
+        # ── Step 3: auto-fit — decide how much to scale the whole drawing
         # and what canvas size to request, based on how big this specific
-        # linker's real geometry is. ───────────────────────────────────────
+        # linker's real geometry is (and, now, how big the guest ion is
+        # relative to the real pore, if one is selected). ─────────────────
         self.scale, self.canvas_width, self.canvas_height = self._auto_fit(scale, metal)
 
-        # ── Step 3: everything below derives from the FINAL, auto-fit
+        # ── Step 4: everything below derives from the FINAL, auto-fit
         # scale — mol_scale, metal radius, square side. ───────────────────
         self._mol_scale = LINKER_ATOM_SCALE * self.scale
         atom_pad = max(BASE_RADII.values()) * self._mol_scale
@@ -248,38 +312,42 @@ class MOFRenderer:
 
         self._sq_size = self._linker_half_w * 2 + 2 * self.metal_r
 
-        # ── Step 4: pore data ────────────────────────────────────────────
-        if mof_id and mof_id in MOF_DB:
-            self._lcd_ang, self._pld_ang, _ = MOF_DB[mof_id] 
-        else:
-            db_result = _lookup_mof(linker_smiles, metal)
-            if db_result:
-                self._lcd_ang, self._pld_ang = db_result
-            else:
-                self._lcd_ang = MOF_PORE_DIAMETER_FALLBACK
-                self._pld_ang = MOF_PORE_DIAMETER_FALLBACK * 0.75
-
-        self._pore_fit_ang = self._pld_ang / 2
-        self._pore_r_ang   = self._lcd_ang / 2
-        self._pore_r_px    = max(self._sq_size / 2 - self.metal_r, 0)
-
-        # Guest ion lookup
-        self._guest_ionic_ang    = None
-        self._guest_hydrated_ang = None
-        self._guest_verified     = None
-        if guest_ion:
-            self._guest_ionic_ang = guest_ion_metadata[0]
-            self._guest_hydrated_ang = guest_ion_metadata[1]
-            self._guest_verified = guest_ion_metadata[2]
+        # ── Step 5: shared guest-ion / pore-boundary pixel scale. Both the
+        # guest ion (+ hydration shell) and the new LCD/PLD boundary
+        # circles drawn in _draw_guest_ion use this SAME conversion, which
+        # is deliberately NOT derived from this panel's own drawn size
+        # (_sq_size / metal_r) — see GUEST_PX_PER_ANGSTROM's comment for
+        # why: a linker-size-derived scale previously made the exact same
+        # real ion balloon up for a bigger linker, with nothing about the
+        # ion having changed. Using one fixed, linker-independent scale
+        # for both the ion and the boundary circles keeps ion sizing
+        # consistent across different MOFs while still making "guest
+        # bigger than the real pore" a genuine, visible fact within any
+        # single rendering (see _draw_guest_ion). self._pore_r_px is not
+        # used for guest-ion scaling for that reason; it's kept only as
+        # a generically useful "how much room this panel's own drawn
+        # geometry leaves" measurement, currently unused elsewhere.
+        self._pore_r_px = max(self._sq_size / 2 - self.metal_r, 0)
+        self._guest_px_per_ang = GUEST_PX_PER_ANGSTROM * self._mol_scale
 
     # ── Canvas auto-fit ──────────────────────────────────────────────────
 
     def _footprint_at_scale(self, scale, metal):
         """
         Re-derives just the sizes needed to estimate the total on-screen
-        footprint (square SBU panel + cube panel, side by side) at a given
-        scale, without touching self or the turtle. Mirrors the same
-        formulas _render()/_draw_cube() use for panel placement.
+        footprint (square SBU panel stacked above the cube panel) at a
+        given scale, without touching self or the turtle. Mirrors the
+        same formulas _render()/_draw_cube() use for panel placement.
+
+        The cube panel isn't symmetric around its own center the way the
+        square panel is: _cube_corners() offsets the back face by
+        (dx, dy) from the front face, so the cube's true bounding box
+        extends dx further to the right and dy further upward than a
+        flat square of the same side length would. That asymmetry has to
+        be counted here (and mirrored in _render()'s cube positioning),
+        or the canvas gets sized/positioned as if the cube were as
+        compact as the square and the far side of the cube ends up
+        clipped.
         """
         mol_scale = LINKER_ATOM_SCALE * scale
         atom_pad = max(BASE_RADII.values()) * mol_scale
@@ -288,38 +356,77 @@ class MOFRenderer:
         metal_r = max(BASE_RADII.get(metal, 28) * mol_scale * 2.2, 14 * scale)
         sq_size = linker_half_w * 2 + 2 * metal_r
 
-        panel_half_w = sq_size / 2 + metal_r + linker_half_h
-        gap = max(sq_size * 0.45, PANEL_GAP_PX * scale)
+        h = sq_size / 2
+        dx = sq_size * 0.38 * DEPTH_STRUT_FACTOR
+        dy = sq_size * 0.28 * DEPTH_STRUT_FACTOR
 
-        total_width = 4 * panel_half_w + gap
-        depth_dy = sq_size * 0.28 * DEPTH_STRUT_FACTOR
-        total_height = sq_size + 2 * metal_r + depth_dy + 40  # label/margin allowance
+        # Each linker strut is rotated to match whichever edge it's drawn
+        # on (see _draw_linker_between), so its perpendicular thickness
+        # (linker_half_h) bulges outward beyond that edge - horizontally
+        # past the left/right (vertical) edges, and vertically past the
+        # top/bottom (horizontal) edges. Both panels need the
+        # linker_half_h term on BOTH axes, not just width: a simple
+        # rod-shaped linker has small perpendicular thickness so this was
+        # easy to miss, but a branched/wide linker's real thickness can
+        # be substantial and was bulging straight past an un-padded
+        # bottom edge before this fix.
+        sq_half_w = h + metal_r + linker_half_h
+        sq_panel_h = 2 * (h + metal_r + linker_half_h)
+
+        # Cube panel: right/top extents get the extra dx/dy from the
+        # back-face offset; left/bottom extents don't.
+        cube_half_w = h + dx / 2 + metal_r + linker_half_h
+        cube_panel_h = 2 * (h + metal_r + linker_half_h) + dy
+
+        # If a guest ion is selected, _draw_guest_ion draws it (and its
+        # hydration shell), plus dashed LCD/PLD boundary circles, using a
+        # fixed, linker-independent px-per-angstrom scale (see
+        # GUEST_PX_PER_ANGSTROM / self._guest_px_per_ang) rather than one
+        # derived from this panel's own drawn size. That means a guest
+        # (or the LCD boundary itself, for a genuinely large pore) can be
+        # bigger than the linker/metal ring drawn here, deliberately
+        # overflowing it (that's the honest point being made when a guest
+        # doesn't fit) — but the CANVAS still has to be big enough to show
+        # that overflow in full rather than clipping it.
+        if self._guest_ionic_ang is not None:
+            px_per_ang_candidate = GUEST_PX_PER_ANGSTROM * mol_scale
+            effective_guest_ang = self._guest_hydrated_ang or self._guest_ionic_ang
+            needed_r_px = max(
+                effective_guest_ang * px_per_ang_candidate,
+                self._pore_r_ang * px_per_ang_candidate,
+            )
+            sq_half_w = max(sq_half_w, needed_r_px)
+            sq_panel_h = max(sq_panel_h, 2 * needed_r_px)
+            cube_half_w = max(cube_half_w, needed_r_px)
+            cube_panel_h = max(cube_panel_h, 2 * needed_r_px)
+
+        total_width = max(2 * sq_half_w, 2 * cube_half_w)
+        vgap = max(sq_size * 0.35, PANEL_GAP_PX * scale * 0.6)
+        total_height = TOP_MARGIN_PX + sq_panel_h + vgap + cube_panel_h
 
         return total_width, total_height
 
     def _auto_fit(self, requested_scale, metal):
         """
-        Returns (final_scale, canvas_width, canvas_height). Small
-        structures get a canvas sized to fit them (within a sensible
-        min/max) at their requested scale unchanged. Structures too big
-        even for the max canvas get scaled down (never below
-        MIN_AUTO_SCALE) so they still fit rather than running off-page.
+        Returns (final_scale, canvas_width, canvas_height). The canvas
+        dimensions returned are always exactly (CANVAS_TARGET_WIDTH,
+        CANVAS_TARGET_HEIGHT) — this method never resizes the canvas
+        itself, only the drawing's scale, so it fits inside that fixed
+        canvas: shrunk down (never below MIN_AUTO_SCALE) if the
+        structure would otherwise be too big to fit, or grown up (never
+        above MAX_AUTO_SCALE) if it comfortably fits with room to
+        spare, so it isn't left small inside a much bigger canvas.
         """
         natural_w, natural_h = self._footprint_at_scale(requested_scale, metal)
-        padded_w = natural_w + CANVAS_MARGIN_PX
-        padded_h = natural_h + CANVAS_MARGIN_PX
-
-        if padded_w <= MAX_CANVAS_WIDTH and padded_h <= MAX_CANVAS_HEIGHT:
-            canvas_w = max(MIN_CANVAS_WIDTH, padded_w)
-            canvas_h = max(MIN_CANVAS_HEIGHT, padded_h)
-            return requested_scale, canvas_w, canvas_h
 
         fit = min(
-            (MAX_CANVAS_WIDTH - CANVAS_MARGIN_PX) / natural_w,
-            (MAX_CANVAS_HEIGHT - CANVAS_MARGIN_PX) / natural_h,
+            (CANVAS_TARGET_WIDTH - CANVAS_MARGIN_PX) / natural_w,
+            (CANVAS_TARGET_HEIGHT - CANVAS_MARGIN_PX) / natural_h,
         )
         fit = max(fit, MIN_AUTO_SCALE)
-        return requested_scale * fit, MAX_CANVAS_WIDTH, MAX_CANVAS_HEIGHT
+        fit = min(fit, MAX_AUTO_SCALE)
+
+        return requested_scale * fit, CANVAS_TARGET_WIDTH, CANVAS_TARGET_HEIGHT
 
     def _center_linker(self):
         """
@@ -386,21 +493,62 @@ class MOFRenderer:
     # ── Internal dispatcher ───────────────────────────────────────────────────
 
     def _render(self, linker_mode, guest_in_square, guest_in_cube):
-        s   = self._sq_size
-        sq_half_w   = s / 2 + self.metal_r + self._linker_half_h
-        cube_half_w = s / 2 + self.metal_r + self._linker_half_h
+        s  = self._sq_size
+        h  = s / 2
+        dx = s * 0.38 * DEPTH_STRUT_FACTOR
+        dy = s * 0.28 * DEPTH_STRUT_FACTOR
 
-        gap = max(s * 0.45, PANEL_GAP_PX * self.scale)
+        vgap = max(s * 0.35, PANEL_GAP_PX * self.scale * 0.6)
 
-        sq_cx = self.cx - gap / 2 - sq_half_w
-        cb_cx = self.cx + gap / 2 + cube_half_w
+        sq_half_h          = h + self.metal_r + self._linker_half_h
+        cube_half_h_bottom = h + self.metal_r + self._linker_half_h
+        cube_half_h_top    = h + dy + self.metal_r + self._linker_half_h
+
+        # Mirror _footprint_at_scale's guest-ion overflow accounting here
+        # so the panels are actually spaced far enough apart in practice,
+        # not just budgeted for in the canvas size. Uses the precise
+        # per-call guest_in_square/guest_in_cube flags (unlike
+        # _footprint_at_scale, which runs once during __init__ before any
+        # particular draw_*() variant is chosen, so it conservatively
+        # assumes a guest ion might appear in either panel).
+        if self._guest_ionic_ang is not None:
+            effective_guest_ang = self._guest_hydrated_ang or self._guest_ionic_ang
+            needed_half_px = max(
+                effective_guest_ang * self._guest_px_per_ang,
+                self._pore_r_ang * self._guest_px_per_ang,
+            )
+            if guest_in_square:
+                sq_half_h = max(sq_half_h, needed_half_px)
+            if guest_in_cube:
+                cube_half_h_bottom = max(cube_half_h_bottom, needed_half_px)
+                cube_half_h_top = max(cube_half_h_top, needed_half_px)
+
+        # Square panel above, cube panel below, split around self.cy with
+        # vgap as the visual separation between the square's bottom edge
+        # and the cube's top edge.
+        sq_cx, sq_cy = self.cx, self.cy + vgap / 2 + sq_half_h
+
+        # The cube's own (cx, cy) is defined as its FRONT face's center
+        # (see _cube_corners), but the back face sits dx right / dy up
+        # from that. Horizontally, that means centering the cube panel
+        # in its slot requires nudging its front-face-center left by
+        # dx/2 first — the same correction _cube_visual_center already
+        # makes for guest-ion placement, mirrored here for the panel's
+        # own bounding box (see _footprint_at_scale, which budgets width
+        # using this same averaged dx/2 half-extent). Vertically no such
+        # shift is needed: cube_half_h_top/cube_half_h_bottom already
+        # measure the true top/bottom edges directly from the front-face
+        # center, so placing cube_cy from cube_half_h_top alone lands
+        # the top edge exactly at the intended slot boundary.
+        cube_cx = self.cx - dx / 2
+        cube_cy = self.cy - vgap / 2 - cube_half_h_top
 
         if linker_mode:
-            self._draw_square(sq_cx, self.cy, s, show_guest=guest_in_square)
-            self._draw_cube(cb_cx, self.cy, s, show_guest=guest_in_cube)
+            self._draw_square(sq_cx, sq_cy, s, show_guest=guest_in_square)
+            self._draw_cube(cube_cx, cube_cy, s, show_guest=guest_in_cube)
         else:
-            self._draw_square_simple(sq_cx, self.cy, s, show_guest=guest_in_square)
-            self._draw_cube_simple(cb_cx, self.cy, s, show_guest=guest_in_cube)
+            self._draw_square_simple(sq_cx, sq_cy, s, show_guest=guest_in_square)
+            self._draw_cube_simple(cube_cx, cube_cy, s, show_guest=guest_in_cube)
 
     # ── Square SBU — linker mode ──────────────────────────────────────────────
 
@@ -414,8 +562,6 @@ class MOFRenderer:
             self._draw_linker_between(corners[i], corners[j], scale_override=sc)
         for x, y in corners:
             self._draw_metal(x, y)
-        self._write(cx, cy + h + self.metal_r + 10,
-                    f"Square SBU [{self.metal}4]", "#333333", 9)
 
     # ── Square SBU — simple mode ──────────────────────────────────────────────
 
@@ -431,8 +577,6 @@ class MOFRenderer:
                        corners[j][0], corners[j][1])
         for x, y in corners:
             self._draw_metal(x, y)
-        self._write(cx, cy + h + self.metal_r + 10,
-                    f"Square SBU [{self.metal}4]", "#333333", 9)
 
     # ── Cube — linker mode ────────────────────────────────────────────────────
 
@@ -466,11 +610,6 @@ class MOFRenderer:
             self._draw_linker_between(front[i], front[j], alpha=1.0, scale_override=fs)
         for x, y in front:
             self._draw_metal(x, y)
-
-        top_y = max(y for _, y in back + front)
-        ddx   = back[0][0] - front[0][0]
-        self._write(cx + ddx/2, top_y + self.metal_r + 10,
-                    f"MOF Cube [{self.metal}8]", "#333333", 9)
 
     # ── Cube — simple mode ────────────────────────────────────────────────────
 
@@ -513,11 +652,6 @@ class MOFRenderer:
             self._line(front[i][0], front[i][1], front[j][0], front[j][1])
         for x, y in front:
             self._draw_metal(x, y)
-
-        top_y = max(y for _, y in back + front)
-        ddx = back[0][0] - front[0][0]
-        self._write(cx + ddx/2, top_y + self.metal_r + 10,
-                    f"MOF Cube [{self.metal}8]", "#333333", 9)
 
     # ── Geometry helpers ──────────────────────────────────────────────────────
 
@@ -682,32 +816,30 @@ class MOFRenderer:
 
         ionic_ang    = self._guest_ionic_ang
         hydrated_ang = self._guest_hydrated_ang
-        effective_ang = hydrated_ang if hydrated_ang is not None else ionic_ang
-
-        px_per_ang       = GUEST_PX_PER_ANGSTROM * self._mol_scale
         hydrated_ang_eff = hydrated_ang if hydrated_ang else ionic_ang
-        true_hyd_px      = hydrated_ang_eff * px_per_ang
-        true_ion_px      = ionic_ang        * px_per_ang
 
-        if effective_ang > self._pore_fit_ang:
-            # Ion doesn't actually fit the pore — draw it deliberately
-            # oversized (1.4x true scale) relative to the pore so the
-            # "too large" mismatch is visually obvious, rather than
-            # drawing it at true scale where it might look plausible.
-            display_hydrated = true_hyd_px * 1.4
-            display_ion      = true_ion_px * 1.4
-        else:
-            # Ion fits — shrink it below true scale (GUEST_DISPLAY_SCALE)
-            # so it doesn't visually dominate/obscure the linker struts
-            # around it.
-            display_hydrated = true_hyd_px * GUEST_DISPLAY_SCALE
-            display_ion      = true_ion_px * GUEST_DISPLAY_SCALE
+        # Deliberately no drawn pore-boundary circle here: the guest ion
+        # and hydration shell are drawn to true, honest scale (via
+        # self._guest_px_per_ang — a fixed, linker-independent scale, see
+        # GUEST_PX_PER_ANGSTROM's comment for why it's not derived from
+        # this panel's own drawn size) purely to give an accurate sense
+        # of relative size next to the linkers/metals. Whether that size
+        # actually fits through the real pore is answered by the LCD/PLD
+        # numbers in the readout panel, not by this drawing — adding an
+        # explicit boundary line here would let someone read "fits/
+        # doesn't fit" straight off the picture without ever looking at
+        # the data.
+        display_hydrated = hydrated_ang_eff * self._guest_px_per_ang
+        display_ion      = ionic_ang        * self._guest_px_per_ang
 
         if display_ion < GUEST_MIN_DISPLAY_PX:
             # Very small ions (e.g. Li+) would otherwise render as a
             # near-invisible dot; grow both the ion and its hydration
             # shell by the same amount so the shell doesn't end up
-            # smaller than the (now-enlarged) bare ion inside it.
+            # smaller than the (now-enlarged) bare ion inside it. This is
+            # purely a visibility floor (a few pixels at most) — it
+            # doesn't distort the size relationship to the pore the way
+            # the old fixed 1.4x/0.6x multipliers did.
             grow = GUEST_MIN_DISPLAY_PX - display_ion
             display_ion += grow
             if display_hydrated > 0:
@@ -800,11 +932,6 @@ class MOFRenderer:
         t.fillcolor(fill_color)
         t.begin_fill(); t.circle(radius); t.end_fill()
         t.penup()
-
-    def _write(self, x, y, text, color, size):
-        self.t.penup(); self.t.goto(x, y)
-        self.t.pencolor(color)
-        self.t.write(text, align="center", font=("Arial", size, "normal"))
 
     def _write_centered(self, x, y, text, color, font_size):
         self.t.penup()
@@ -961,6 +1088,7 @@ def draw_lattice(metal, linker_smiles, mof_id=None, guest_ion=None, guest_ion_me
         # position in that repaint — re-asserting it right here, as the
         # very last thing before the flush, is the reliable fix.
         try:
+            screen.tracer(1, 0)
             t.hideturtle()
         except Exception:
             pass
