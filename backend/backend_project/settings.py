@@ -44,7 +44,7 @@ DEBUG = os.getenv("DJANGO_DEBUG", "False") == "True"
 ALLOWED_HOSTS = [
     "localhost",
     "127.0.0.1",
-    "chem-llm-web-app.onrender.com",
+    "chem-llm-web-app-9s9h.onrender.com"
 ]
 
 ############################################
