@@ -39,15 +39,7 @@ DEBUG = os.getenv("DJANGO_DEBUG", "False") == "True"
 ############################################
 # Hosts
 # ──────────────────────────────────────────
-# PRODUCTION_DOMAIN is read from your .env file.
-#
-# !! REPLACE "your-app.your-domain.com" in your .env with your real domain !!
-#
-# If you are forking this repo to deploy your own instance:
-#   1. Copy backend/backend_project/.env.template → .env
-#   2. Set PRODUCTION_DOMAIN to your server's domain or IP
 ############################################
-PRODUCTION_DOMAIN = os.getenv("PRODUCTION_DOMAIN", "your-app.your-domain.com")
 
 ALLOWED_HOSTS = [
     "localhost",
