@@ -91,8 +91,7 @@ MIDDLEWARE = [
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:8000",
     "http://127.0.0.1:8000",
-    "http://localhost:32775",            
-    "https://chem-llm-web-app-frontend.onrender.com",     
+    "http://localhost:32775",               
 ]
 # NOTE: "32775" is whatever port Vite happened to pick last — Vite's
 # default dev port is actually 5173, and it auto-increments to the next
@@ -109,7 +108,6 @@ CSRF_TRUSTED_ORIGINS = [
     "http://localhost:8000",
     "http://127.0.0.1:8000",
     "http://localhost:32775",
-    "https://chem-llm-web-app-frontend.onrender.com",
 ]
 
 # CSRF Cookie Settings
@@ -208,9 +206,8 @@ SESSION_COOKIE_SECURE = True
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_AGE = 5400
 SESSION_EXPIRE_AT_BROWSER_CLOSE = False
-SESSION_COOKIE_SAMESITE = "None"
+SESSION_COOKIE_SAMESITE = "Lax"
 
-CSRF_COOKIE_SAMESITE = "None"
 CSRF_COOKIE_SECURE = True
 CSRF_COOKIE_HTTPONLY = False
 
