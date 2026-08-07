@@ -47,12 +47,16 @@ logger = logging.getLogger(__name__)
 # body after the first one.
 #
 # ── Model fallback pattern ──────────────────────────────────────────────────
-# `ask_gemini`, `prime_gemini`, and `ask_gemini_with_data` each try the same
-# ordered list of models, falling through to the next one on quota exhaustion
-# or a transient network/server error, and retrying the same model a couple
-# times first on a transient "UNAVAILABLE" server error. This trades a bit of
-# latency in the worst case for not surfacing a hard failure to the user just
-# because the current default model is temporarily over quota.
+# `ask_gemini`, `prime_gemini`, and `ask_gemini_with_data` all delegate to
+# `_call_gemini_with_fallback` (below), which tries the shared
+# `GEMINI_MODEL_NAMES` list in order, skipping any model already known-dead
+# for this key (see dead-model cache section), retrying the same model a
+# couple times on a transient "UNAVAILABLE" server error, and falling
+# through to the next model on quota exhaustion, a permanent per-key
+# rejection, or a network error. This trades a bit of latency in the worst
+# case for not surfacing a hard failure to the user just because the
+# current default model is temporarily over quota or no longer available
+# to this particular key.
 
 # Locate assets folder safely relative to backend directory structure
 MOF_DATA_CSV_PATH = Path(settings.BASE_DIR) / "assets" / "MOF_data.csv"
@@ -223,15 +227,15 @@ def test_api_key(request):
     """Debug endpoint to test if the stored API key works"""
     logger.info("=" * 80)
     logger.info("[TEST_KEY] Request received")
- 
+
     token = request.COOKIES.get("gemini_token")
     if not token:
         return Response({"error": "No token"}, status=401)
- 
+
     api_key = cache.get(token)
     if not api_key:
         return Response({"error": "Invalid token"}, status=403)
- 
+
     try:
         client = genai.Client(api_key=api_key)
         response = client.models.generate_content(
@@ -245,8 +249,8 @@ def test_api_key(request):
         logger.error(f"[TEST_KEY] Error: {e}", exc_info=True)
         logger.info("=" * 80)
         return Response({"success": False, "error": str(e), "error_type": type(e).__name__}, status=400)
- 
- 
+
+
 ############################################
 # Dead-model cache
 #
@@ -263,22 +267,22 @@ DEAD_MODEL_CACHE_PREFIX = "gemini_dead_model:"
 DEAD_MODEL_CACHE_TIMEOUT = 60 * 60 * 24 * 7  # 1 week -- re-checked periodically in
                                                # case billing changes or Google
                                                # re-adds a model to the free tier
- 
- 
+
+
 def _dead_model_cache_key(token, model_name):
     return f"{DEAD_MODEL_CACHE_PREFIX}{token}:{model_name}"
- 
- 
+
+
 def _mark_model_dead(token, model_name, reason):
     """Remember that this model is permanently unusable for this key."""
     cache.set(_dead_model_cache_key(token, model_name), reason, timeout=DEAD_MODEL_CACHE_TIMEOUT)
- 
- 
+
+
 def _dead_model_reason(token, model_name):
     """Returns the cached reason string if this model is known-dead for this key, else None."""
     return cache.get(_dead_model_cache_key(token, model_name))
- 
- 
+
+
 def _looks_like_deprecated_for_key(error_message: str) -> bool:
     """
     Model has been sunset for this specific key/account, independent of
@@ -288,8 +292,8 @@ def _looks_like_deprecated_for_key(error_message: str) -> bool:
     signals = ["no longer available", "NOT_FOUND"]
     lowered = error_message.lower()
     return any(s.lower() in lowered for s in signals)
- 
- 
+
+
 def _looks_like_paid_only_rejection(error_message: str) -> bool:
     """
     Model exists but requires a paid/billing-enabled account. Google doesn't
@@ -305,8 +309,138 @@ def _looks_like_paid_only_rejection(error_message: str) -> bool:
     ]
     lowered = error_message.lower()
     return any(s.lower() in lowered for s in signals)
- 
- 
+
+
+############################################
+# Shared Gemini model-fallback caller
+#
+# Consolidates the try/retry/fallback loop previously duplicated across
+# ask_gemini, prime_gemini, and ask_gemini_with_data. Each of those views
+# now just builds its own prompt and hands it to this function.
+############################################
+GEMINI_MODEL_NAMES = [
+    "gemini-2.5-flash-lite",  # stable, highest free-tier RPD -- try first
+    "gemini-2.5-flash",       # stable, fast, generous quota
+    "gemini-2.5-pro",         # stable, most capable, tighter free-tier RPM
+    "gemini-3-flash-preview", # preview -- unreliable, last resort
+    "gemini-3.1-flash-lite",  # preview -- unreliable, last resort
+]
+
+
+def _call_gemini_with_fallback(client, token, prompt, log_prefix, max_retries=2, delay=2):
+    """
+    Tries each model in GEMINI_MODEL_NAMES in order against `prompt`,
+    skipping any model already known-dead for this token, retrying the
+    same model up to `max_retries` times with exponential backoff only on
+    a transient "UNAVAILABLE" server error, and falling through to the
+    next model on quota exhaustion, a permanent per-key rejection
+    (paid-only or deprecated-for-this-key -- these get cached as dead so
+    future calls skip them instantly), or a network-level error.
+
+    Returns a dict with EXACTLY ONE of:
+      - {"text": str, "model_used": str, "warnings": list[str]}   on success
+      - {"error_response": Response}                              on failure
+
+    `log_prefix` (e.g. "ASK_GEMINI") is used to tag log lines so they can
+    still be told apart per-endpoint even though the loop logic is shared.
+    The caller is responsible for returning `error_response` directly and
+    for building its own success Response from `text`/`model_used`/
+    `warnings` (since each endpoint's success payload shape differs
+    slightly, e.g. prime_gemini prefixes a confirmation message).
+    """
+    warnings = []
+
+    for model_name in GEMINI_MODEL_NAMES:
+        dead_reason = _dead_model_reason(token, model_name)
+        if dead_reason:
+            msg = f"Skipping {model_name} (previously unavailable: {dead_reason}), trying next model."
+            logger.info(f"[{log_prefix}] {msg}")
+            warnings.append(msg)
+            continue
+
+        for attempt in range(max_retries):
+            try:
+                logger.info(f"[{log_prefix}] Trying model: {model_name} (Attempt {attempt + 1}/{max_retries})")
+                response = client.models.generate_content(model=model_name, contents=prompt)
+                response_text = response.text if response.text is not None else ""
+                logger.info(f"[{log_prefix}] SUCCESS with {model_name}. Response length: {len(response_text)}")
+                logger.info("=" * 80)
+                return {"text": response_text, "model_used": model_name, "warnings": warnings}
+
+            except ClientError as e:
+                error_message = str(e)
+                logger.error(f"[{log_prefix}] ClientError with {model_name}: {error_message}")
+
+                if "API_KEY_INVALID" in error_message or "API key not valid" in error_message:
+                    logger.error(f"[{log_prefix}] FAILURE: Invalid API key")
+                    logger.info("=" * 80)
+                    return {"error_response": Response(
+                        {"error": "Invalid or unauthorized API key provided."},
+                        status=status.HTTP_401_UNAUTHORIZED,
+                    )}
+
+                if "RESOURCE_EXHAUSTED" in error_message or "quota" in error_message.lower():
+                    msg = f"{model_name} hit its quota limit, trying next model."
+                    logger.warning(f"[{log_prefix}] {msg}")
+                    warnings.append(msg)
+                    break  # transient -- do NOT blacklist, just move on for now
+
+                if _looks_like_deprecated_for_key(error_message):
+                    msg = f"{model_name} is no longer available for this API key, trying next model."
+                    logger.warning(f"[{log_prefix}] {msg}")
+                    _mark_model_dead(token, model_name, "deprecated for this key")
+                    warnings.append(msg)
+                    break
+
+                if _looks_like_paid_only_rejection(error_message):
+                    msg = f"{model_name} requires a paid account, trying next model."
+                    logger.warning(f"[{log_prefix}] {msg}")
+                    _mark_model_dead(token, model_name, "requires paid tier")
+                    warnings.append(msg)
+                    break
+
+                logger.info("=" * 80)
+                return {"error_response": Response(
+                    {"error": f"Client error with {model_name}: {error_message}"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )}
+
+            except ServerError as e:
+                if "UNAVAILABLE" in str(e):
+                    logger.warning(f"[{log_prefix}] {model_name} unavailable, retrying...")
+                    time.sleep(delay * (2 ** attempt))
+                    continue
+                logger.error(f"[{log_prefix}] ServerError: {e}", exc_info=True)
+                logger.info("=" * 80)
+                return {"error_response": Response(
+                    {"error": f"Server error: {str(e)}"},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )}
+
+            except (httpx.RemoteProtocolError, httpx.ConnectError, httpx.ReadError) as e:
+                msg = f"Network error reaching {model_name}, trying next model."
+                logger.warning(f"[{log_prefix}] {msg}: {e}")
+                warnings.append(msg)
+                break  # move to next model
+            except Exception as e:
+                logger.error(f"[{log_prefix}] Unexpected error: {e}", exc_info=True)
+                logger.info("=" * 80)
+                return {"error_response": Response(
+                    {"error": f"Unexpected error: {str(e)}"},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )}
+
+    logger.error(f"[{log_prefix}] FAILURE: All models exhausted")
+    logger.info("=" * 80)
+    return {"error_response": Response(
+        {
+            "error": "All Gemini models are currently unavailable or quota exceeded.",
+            "warnings": warnings,
+        },
+        status=status.HTTP_503_SERVICE_UNAVAILABLE,
+    )}
+
+
 ############################################
 # Gemini query endpoint
 ############################################
@@ -315,155 +449,57 @@ def _looks_like_paid_only_rejection(error_message: str) -> bool:
 def ask_gemini(request, max_retries=2, delay=2):
     """
     Sends `prompt` to Gemini using the API key resolved from the
-    caller's gemini_token cookie (see module-level auth note). Tries
-    each model in `model_names` in order, skipping any model already
-    known-dead for this key (see dead-model cache above). Within a
-    model, retries up to `max_retries` times with exponential backoff
-    (`delay * 2**attempt`) only on a transient "UNAVAILABLE" server
-    error.
- 
-    Falls through to the next model immediately on:
-      - quota exhaustion (transient -- NOT cached as dead)
-      - the model being permanently dead for this key (paid-only, or
-        deprecated-for-this-account) -- cached as dead so future
-        requests skip it instantly
-      - a network-level error
- 
-    An invalid API key is reported back to the caller right away. Any
-    other non-transient client error is also reported back right away
-    rather than retried.
- 
+    caller's gemini_token cookie (see module-level auth note), via the
+    shared `_call_gemini_with_fallback` model-fallback loop (see that
+    function's docstring for the retry/fallback rules).
+
     On success, the response includes a `warnings` list describing any
     models that were skipped or failed along the way, so the caller
     can surface that to the user instead of it only living in logs.
     """
     logger.info("=" * 80)
     logger.info("[ASK_GEMINI] ========== NEW REQUEST ==========")
- 
-    model_names = [
-        "gemini-2.5-flash-lite",  # stable, highest free-tier RPD -- try first
-        "gemini-2.5-flash",       # stable, fast, generous quota
-        "gemini-2.5-pro",         # stable, most capable, tighter free-tier RPM
-        "gemini-3-flash-preview", # preview -- unreliable, last resort
-        "gemini-3.1-flash-lite",  # preview -- unreliable, last resort
-    ]
- 
+
     token = request.COOKIES.get("gemini_token")
     if not token:
         logger.error("[ASK_GEMINI] FAILURE: No gemini_token cookie present")
         logger.info("=" * 80)
         return Response({"error": "Missing gemini_token cookie."}, status=status.HTTP_401_UNAUTHORIZED)
- 
+
     try:
         api_key = cache.get(token)
     except Exception as cache_error:
         logger.error(f"[ASK_GEMINI] Cache error: {cache_error}", exc_info=True)
         logger.info("=" * 80)
         return Response({"error": f"Cache error: {str(cache_error)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
- 
+
     if not api_key:
         logger.error("[ASK_GEMINI] FAILURE: Token not found in cache")
         logger.info("=" * 80)
         return Response({"error": "Invalid or expired token."}, status=status.HTTP_403_FORBIDDEN)
- 
+
     prompt = request.data.get("prompt")
     if not prompt:
         logger.error("[ASK_GEMINI] FAILURE: No prompt in request")
         logger.info("=" * 80)
         return Response({"error": "Prompt is missing in request."}, status=status.HTTP_400_BAD_REQUEST)
- 
+
     try:
         client = genai.Client(api_key=api_key)
     except Exception as e:
         logger.error(f"[ASK_GEMINI] Failed to create Gemini client: {e}", exc_info=True)
         logger.info("=" * 80)
         return Response({"error": f"Failed to create Gemini client: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
- 
-    # Collects a human-readable trail of what happened, so the caller can
-    # show the user "gemini-2.5-flash wasn't available, so we used
-    # gemini-2.5-flash-lite instead" rather than that only being in logs.
-    warnings = []
- 
-    for model_name in model_names:
-        dead_reason = _dead_model_reason(token, model_name)
-        if dead_reason:
-            msg = f"Skipping {model_name} (previously unavailable: {dead_reason}), trying next model."
-            logger.info(f"[ASK_GEMINI] {msg}")
-            warnings.append(msg)
-            continue
- 
-        for attempt in range(max_retries):
-            try:
-                logger.info(f"[ASK_GEMINI] Trying model: {model_name} (Attempt {attempt + 1}/{max_retries})")
-                response = client.models.generate_content(model=model_name, contents=prompt)
-                response_text = response.text if response.text is not None else ""
-                logger.info(f"[ASK_GEMINI] SUCCESS with {model_name}. Response length: {len(response_text)}")
-                logger.info("=" * 80)
-                return Response(
-                    {"response": response_text, "model_used": model_name, "warnings": warnings},
-                    status=status.HTTP_200_OK,
-                )
- 
-            except ClientError as e:
-                error_message = str(e)
-                logger.error(f"[ASK_GEMINI] ClientError with {model_name}: {error_message}")
- 
-                if "API_KEY_INVALID" in error_message or "API key not valid" in error_message:
-                    logger.error("[ASK_GEMINI] FAILURE: Invalid API key")
-                    logger.info("=" * 80)
-                    return Response({"error": "Invalid or unauthorized API key provided."}, status=status.HTTP_401_UNAUTHORIZED)
- 
-                if "RESOURCE_EXHAUSTED" in error_message or "quota" in error_message.lower():
-                    msg = f"{model_name} hit its quota limit, trying next model."
-                    logger.warning(f"[ASK_GEMINI] {msg}")
-                    warnings.append(msg)
-                    break  # transient -- do NOT blacklist, just move on for now
- 
-                if _looks_like_deprecated_for_key(error_message):
-                    msg = f"{model_name} is no longer available for this API key, trying next model."
-                    logger.warning(f"[ASK_GEMINI] {msg}")
-                    _mark_model_dead(token, model_name, "deprecated for this key")
-                    warnings.append(msg)
-                    break
- 
-                if _looks_like_paid_only_rejection(error_message):
-                    msg = f"{model_name} requires a paid account, trying next model."
-                    logger.warning(f"[ASK_GEMINI] {msg}")
-                    _mark_model_dead(token, model_name, "requires paid tier")
-                    warnings.append(msg)
-                    break
- 
-                logger.info("=" * 80)
-                return Response({"error": f"Client error with {model_name}: {error_message}"}, status=status.HTTP_400_BAD_REQUEST)
- 
-            except ServerError as e:
-                if "UNAVAILABLE" in str(e):
-                    logger.warning(f"[ASK_GEMINI] {model_name} unavailable, retrying...")
-                    time.sleep(delay * (2 ** attempt))
-                    continue
-                logger.error(f"[ASK_GEMINI] ServerError: {e}", exc_info=True)
-                logger.info("=" * 80)
-                return Response({"error": f"Server error: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
- 
-            except (httpx.RemoteProtocolError, httpx.ConnectError, httpx.ReadError) as e:
-                msg = f"Network error reaching {model_name}, trying next model."
-                logger.warning(f"[ASK_GEMINI] {msg}: {e}")
-                warnings.append(msg)
-                break  # move to next model
-            except Exception as e:
-                logger.error(f"[ASK_GEMINI] Unexpected error: {e}", exc_info=True)
-                logger.info("=" * 80)
-                return Response({"error": f"Unexpected error: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
- 
-    logger.error("[ASK_GEMINI] FAILURE: All models exhausted")
-    logger.info("=" * 80)
+
+    result = _call_gemini_with_fallback(client, token, prompt, "ASK_GEMINI", max_retries=max_retries, delay=delay)
+    if "error_response" in result:
+        return result["error_response"]
+
     return Response(
-        {
-            "error": "All Gemini models are currently unavailable or quota exceeded.",
-            "warnings": warnings,
-        },
-        status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        {"response": result["text"], "model_used": result["model_used"], "warnings": result["warnings"]},
+        status=status.HTTP_200_OK,
     )
+
 
 ############################################
 # Helper: load MOF CSV as formatted string
@@ -510,8 +546,9 @@ def load_mof_csv():
 @api_view(["POST"])
 def prime_gemini(request, max_retries=2, delay=2):
     """
-    Sends the MOF CSV data to Gemini as a standalone priming call.
-    Returns Gemini's acknowledgment response, prefaced with a success message.
+    Sends the MOF CSV data to Gemini as a standalone priming call, via
+    the shared `_call_gemini_with_fallback` model-fallback loop. Returns
+    Gemini's acknowledgment response, prefaced with a success message.
     """
     logger.info("=" * 80)
     logger.info("[PRIME_GEMINI] ========== NEW PRIME REQUEST ==========")
@@ -541,58 +578,24 @@ def prime_gemini(request, max_retries=2, delay=2):
         f"{csv_content}"
     )
 
-    model_names = [
-        "gemini-2.5-flash",       # stable, fast, generous quota -- try first
-        "gemini-2.5-flash-lite",  # stable, lightweight fallback
-        "gemini-2.5-pro",         # stable, most capable
-        "gemini-3-flash-preview", # preview -- unreliable, last resort
-        "gemini-3-pro-preview",   # preview -- unreliable, last resort
-    ]
-
     try:
         client = genai.Client(api_key=api_key)
     except Exception as e:
         logger.error(f"[PRIME_GEMINI] Failed to create Gemini client: {e}", exc_info=True)
         return Response({"error": f"Failed to create Gemini client: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-    for model_name in model_names:
-        for attempt in range(max_retries):
-            try:
-                logger.info(f"[PRIME_GEMINI] Trying model: {model_name} (Attempt {attempt + 1}/{max_retries})")
-                response = client.models.generate_content(model=model_name, contents=priming_prompt)
-                response_text = response.text if response.text is not None else ""
-                logger.info(f"[PRIME_GEMINI] SUCCESS with {model_name}")
-                logger.info("=" * 80)
-                return Response({"response": "✅ MOF data was successfully submitted to Gemini.\n\n" + response_text}, status=status.HTTP_200_OK)
+    result = _call_gemini_with_fallback(client, token, priming_prompt, "PRIME_GEMINI", max_retries=max_retries, delay=delay)
+    if "error_response" in result:
+        return result["error_response"]
 
-            except ClientError as e:
-                error_message = str(e)
-                logger.error(f"[PRIME_GEMINI] ClientError with {model_name}: {error_message}")
-                if "API_KEY_INVALID" in error_message or "API key not valid" in error_message:
-                    return Response({"error": "Invalid or unauthorized API key provided."}, status=status.HTTP_401_UNAUTHORIZED)
-                if "RESOURCE_EXHAUSTED" in error_message or "quota" in error_message.lower():
-                    logger.warning(f"[PRIME_GEMINI] {model_name} quota exceeded, trying next model...")
-                    break
-                return Response({"error": f"Client error with {model_name}: {error_message}"}, status=status.HTTP_400_BAD_REQUEST)
-
-            except ServerError as e:
-                if "UNAVAILABLE" in str(e):
-                    logger.warning(f"[ASK_GEMINI] {model_name} unavailable, retrying...")
-                    time.sleep(delay * (2 ** attempt))
-                    continue
-                logger.error(f"[PRIME_GEMINI] ServerError: {e}", exc_info=True)
-                return Response({"error": f"Server error: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-            except (httpx.RemoteProtocolError, httpx.ConnectError, httpx.ReadError) as e:
-                logger.warning(f"[PRIME_GEMINI] Network error with {model_name}: {e} — trying next model")
-                break  # move to next model
-            except Exception as e:
-                logger.error(f"[PRIME_GEMINI] Unexpected error: {e}", exc_info=True)
-                return Response({"error": f"Unexpected error: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-    logger.error("[PRIME_GEMINI] FAILURE: All models exhausted")
-    logger.info("=" * 80)
-    return Response({"error": "All Gemini models are currently unavailable or quota exceeded."}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+    return Response(
+        {
+            "response": "✅ MOF data was successfully submitted to Gemini.\n\n" + result["text"],
+            "model_used": result["model_used"],
+            "warnings": result["warnings"],
+        },
+        status=status.HTTP_200_OK,
+    )
 
 
 ############################################
@@ -603,7 +606,8 @@ def prime_gemini(request, max_retries=2, delay=2):
 def ask_gemini_with_data(request, max_retries=2, delay=2):
     """
     Same as ask_gemini but prepends the full MOF CSV to every prompt
-    so Gemini has the reference data available for every question.
+    so Gemini has the reference data available for every question, via
+    the shared `_call_gemini_with_fallback` model-fallback loop.
     """
     logger.info("=" * 80)
     logger.info("[ASK_GEMINI_WITH_DATA] ========== NEW REQUEST ==========")
@@ -635,58 +639,20 @@ def ask_gemini_with_data(request, max_retries=2, delay=2):
         f"USER QUESTION: {prompt}"
     )
 
-    model_names = [
-        "gemini-2.5-flash",       # stable, fast, generous quota -- try first
-        "gemini-2.5-flash-lite",  # stable, lightweight fallback
-        "gemini-2.5-pro",         # stable, most capable
-        "gemini-3-flash-preview", # preview -- unreliable, last resort
-        "gemini-3-pro-preview",   # preview -- unreliable, last resort
-    ]
-
     try:
         client = genai.Client(api_key=api_key)
     except Exception as e:
         logger.error(f"[ASK_GEMINI_WITH_DATA] Failed to create Gemini client: {e}", exc_info=True)
         return Response({"error": f"Failed to create Gemini client: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-    for model_name in model_names:
-        for attempt in range(max_retries):
-            try:
-                logger.info(f"[ASK_GEMINI_WITH_DATA] Trying model: {model_name} (Attempt {attempt + 1}/{max_retries})")
-                response = client.models.generate_content(model=model_name, contents=full_prompt)
-                response_text = response.text if response.text is not None else ""
-                logger.info(f"[ASK_GEMINI_WITH_DATA] SUCCESS with {model_name}")
-                logger.info("=" * 80)
-                return Response({"response": response_text}, status=status.HTTP_200_OK)
+    result = _call_gemini_with_fallback(client, token, full_prompt, "ASK_GEMINI_WITH_DATA", max_retries=max_retries, delay=delay)
+    if "error_response" in result:
+        return result["error_response"]
 
-            except ClientError as e:
-                error_message = str(e)
-                logger.error(f"[ASK_GEMINI_WITH_DATA] ClientError with {model_name}: {error_message}")
-                if "API_KEY_INVALID" in error_message or "API key not valid" in error_message:
-                    return Response({"error": "Invalid or unauthorized API key provided."}, status=status.HTTP_401_UNAUTHORIZED)
-                if "RESOURCE_EXHAUSTED" in error_message or "quota" in error_message.lower():
-                    logger.warning(f"[ASK_GEMINI_WITH_DATA] {model_name} quota exceeded, trying next model...")
-                    break
-                return Response({"error": f"Client error with {model_name}: {error_message}"}, status=status.HTTP_400_BAD_REQUEST)
-
-            except ServerError as e:
-                if "UNAVAILABLE" in str(e):
-                    logger.warning(f"[ASK_GEMINI_WITH_DATA] {model_name} unavailable, retrying...")
-                    time.sleep(delay * (2 ** attempt))
-                    continue
-                logger.error(f"[ASK_GEMINI_WITH_DATA] ServerError: {e}", exc_info=True)
-                return Response({"error": f"Server error: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-            except (httpx.RemoteProtocolError, httpx.ConnectError, httpx.ReadError) as e:
-                logger.warning(f"[ASK_GEMINI_WITH_DATA] Network error with {model_name}: {e} — trying next model")
-                break  # move to next model
-            except Exception as e:
-                logger.error(f"[ASK_GEMINI_WITH_DATA] Unexpected error: {e}", exc_info=True)
-                return Response({"error": f"Unexpected error: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-    logger.error("[ASK_GEMINI_WITH_DATA] FAILURE: All models exhausted")
-    logger.info("=" * 80)
-    return Response({"error": "All Gemini models are currently unavailable or quota exceeded."}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+    return Response(
+        {"response": result["text"], "model_used": result["model_used"], "warnings": result["warnings"]},
+        status=status.HTTP_200_OK,
+    )
 
 
 ############################################
