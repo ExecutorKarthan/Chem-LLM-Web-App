@@ -1,5 +1,5 @@
 # LLM-Web-App
-This educational tool supports students from 6th grade and up by demonstrating the benefits, drawbacks, and ethical considerations involved in using large language models (LLMs). It is strictly for educational use, specifically as a demonstration of AI's capabilities. This app is deployed via Render and can be viewed here [https://chem-llm-web-app-frontend.onrender.com](https://chem-llm-web-app-frontend.onrender.com). Please note that delays may occur with the Render deployment as the backend may need to spin up. To receive the best experience, try the app and if it does not start initially try again in 30-60 seconds.
+This educational tool supports students from 6th grade and up by demonstrating the benefits, drawbacks, and ethical considerations involved in using large language models (LLMs). It is strictly for educational use, specifically as a demonstration of AI's capabilities. This app is deployed via Render and can be viewed here [https://chem-llm-web-app-9s9h.onrender.com/](https://chem-llm-web-app-9s9h.onrender.com/). Please note that delays may occur with the Render deployment as the backend may need to spin up. To receive the best experience, try the app and if it does not start initially try again in 30-60 seconds.
 
 ## Table of Contents
 1. [Description](#description)

@@ -223,15 +223,15 @@ def test_api_key(request):
     """Debug endpoint to test if the stored API key works"""
     logger.info("=" * 80)
     logger.info("[TEST_KEY] Request received")
-
+ 
     token = request.COOKIES.get("gemini_token")
     if not token:
         return Response({"error": "No token"}, status=401)
-
+ 
     api_key = cache.get(token)
     if not api_key:
         return Response({"error": "Invalid token"}, status=403)
-
+ 
     try:
         client = genai.Client(api_key=api_key)
         response = client.models.generate_content(
@@ -245,8 +245,68 @@ def test_api_key(request):
         logger.error(f"[TEST_KEY] Error: {e}", exc_info=True)
         logger.info("=" * 80)
         return Response({"success": False, "error": str(e), "error_type": type(e).__name__}, status=400)
-
-
+ 
+ 
+############################################
+# Dead-model cache
+#
+# Some rejections mean a model will NEVER work for this key again, no
+# matter how many times we retry: the key belongs to a paid-tier-only
+# model, or the model has been sunset for this account ("no longer
+# available to new users"). We remember those permanently (well, for
+# a long TTL) per-token so we stop wasting a request on them. This is
+# different from quota exhaustion (RESOURCE_EXHAUSTED), which is
+# transient and should NOT be cached -- the model will work again
+# later today or tomorrow.
+############################################
+DEAD_MODEL_CACHE_PREFIX = "gemini_dead_model:"
+DEAD_MODEL_CACHE_TIMEOUT = 60 * 60 * 24 * 7  # 1 week -- re-checked periodically in
+                                               # case billing changes or Google
+                                               # re-adds a model to the free tier
+ 
+ 
+def _dead_model_cache_key(token, model_name):
+    return f"{DEAD_MODEL_CACHE_PREFIX}{token}:{model_name}"
+ 
+ 
+def _mark_model_dead(token, model_name, reason):
+    """Remember that this model is permanently unusable for this key."""
+    cache.set(_dead_model_cache_key(token, model_name), reason, timeout=DEAD_MODEL_CACHE_TIMEOUT)
+ 
+ 
+def _dead_model_reason(token, model_name):
+    """Returns the cached reason string if this model is known-dead for this key, else None."""
+    return cache.get(_dead_model_cache_key(token, model_name))
+ 
+ 
+def _looks_like_deprecated_for_key(error_message: str) -> bool:
+    """
+    Model has been sunset for this specific key/account, independent of
+    billing status. Seen in practice as a 404 NOT_FOUND with wording like
+    'no longer available to new users'.
+    """
+    signals = ["no longer available", "NOT_FOUND"]
+    lowered = error_message.lower()
+    return any(s.lower() in lowered for s in signals)
+ 
+ 
+def _looks_like_paid_only_rejection(error_message: str) -> bool:
+    """
+    Model exists but requires a paid/billing-enabled account. Google doesn't
+    give one single clean error code for this, so we match on wording and
+    status codes that have shown up in practice.
+    """
+    signals = [
+        "not available on the free tier",
+        "requires a billing account",
+        "billing account is required",
+        "FAILED_PRECONDITION",
+        "PERMISSION_DENIED",
+    ]
+    lowered = error_message.lower()
+    return any(s.lower() in lowered for s in signals)
+ 
+ 
 ############################################
 # Gemini query endpoint
 ############################################
@@ -256,56 +316,82 @@ def ask_gemini(request, max_retries=2, delay=2):
     """
     Sends `prompt` to Gemini using the API key resolved from the
     caller's gemini_token cookie (see module-level auth note). Tries
-    each model in `model_names` in order; within a model, retries up
-    to `max_retries` times with exponential backoff (`delay * 2**attempt`)
-    only on a transient "UNAVAILABLE" server error, and falls through to
-    the next model immediately on quota exhaustion or a network-level
-    error. An invalid API key or a non-transient client error is
-    reported back to the caller right away rather than retried.
+    each model in `model_names` in order, skipping any model already
+    known-dead for this key (see dead-model cache above). Within a
+    model, retries up to `max_retries` times with exponential backoff
+    (`delay * 2**attempt`) only on a transient "UNAVAILABLE" server
+    error.
+ 
+    Falls through to the next model immediately on:
+      - quota exhaustion (transient -- NOT cached as dead)
+      - the model being permanently dead for this key (paid-only, or
+        deprecated-for-this-account) -- cached as dead so future
+        requests skip it instantly
+      - a network-level error
+ 
+    An invalid API key is reported back to the caller right away. Any
+    other non-transient client error is also reported back right away
+    rather than retried.
+ 
+    On success, the response includes a `warnings` list describing any
+    models that were skipped or failed along the way, so the caller
+    can surface that to the user instead of it only living in logs.
     """
     logger.info("=" * 80)
     logger.info("[ASK_GEMINI] ========== NEW REQUEST ==========")
-
+ 
     model_names = [
-        "gemini-2.5-flash",       # stable, fast, generous quota -- try first
-        "gemini-2.5-flash-lite",  # stable, lightweight fallback
-        "gemini-2.5-pro",         # stable, most capable
+        "gemini-2.5-flash-lite",  # stable, highest free-tier RPD -- try first
+        "gemini-2.5-flash",       # stable, fast, generous quota
+        "gemini-2.5-pro",         # stable, most capable, tighter free-tier RPM
         "gemini-3-flash-preview", # preview -- unreliable, last resort
-        "gemini-3-pro-preview",   # preview -- unreliable, last resort
+        "gemini-3.1-flash-lite",  # preview -- unreliable, last resort
     ]
-
+ 
     token = request.COOKIES.get("gemini_token")
     if not token:
         logger.error("[ASK_GEMINI] FAILURE: No gemini_token cookie present")
         logger.info("=" * 80)
         return Response({"error": "Missing gemini_token cookie."}, status=status.HTTP_401_UNAUTHORIZED)
-
+ 
     try:
         api_key = cache.get(token)
     except Exception as cache_error:
         logger.error(f"[ASK_GEMINI] Cache error: {cache_error}", exc_info=True)
         logger.info("=" * 80)
         return Response({"error": f"Cache error: {str(cache_error)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
+ 
     if not api_key:
         logger.error("[ASK_GEMINI] FAILURE: Token not found in cache")
         logger.info("=" * 80)
         return Response({"error": "Invalid or expired token."}, status=status.HTTP_403_FORBIDDEN)
-
+ 
     prompt = request.data.get("prompt")
     if not prompt:
         logger.error("[ASK_GEMINI] FAILURE: No prompt in request")
         logger.info("=" * 80)
         return Response({"error": "Prompt is missing in request."}, status=status.HTTP_400_BAD_REQUEST)
-
+ 
     try:
         client = genai.Client(api_key=api_key)
     except Exception as e:
         logger.error(f"[ASK_GEMINI] Failed to create Gemini client: {e}", exc_info=True)
         logger.info("=" * 80)
         return Response({"error": f"Failed to create Gemini client: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
+ 
+    # Collects a human-readable trail of what happened, so the caller can
+    # show the user "gemini-2.5-flash wasn't available, so we used
+    # gemini-2.5-flash-lite instead" rather than that only being in logs.
+    warnings = []
+ 
     for model_name in model_names:
+        dead_reason = _dead_model_reason(token, model_name)
+        if dead_reason:
+            msg = f"Skipping {model_name} (previously unavailable: {dead_reason}), trying next model."
+            logger.info(f"[ASK_GEMINI] {msg}")
+            warnings.append(msg)
+            continue
+ 
         for attempt in range(max_retries):
             try:
                 logger.info(f"[ASK_GEMINI] Trying model: {model_name} (Attempt {attempt + 1}/{max_retries})")
@@ -313,21 +399,43 @@ def ask_gemini(request, max_retries=2, delay=2):
                 response_text = response.text if response.text is not None else ""
                 logger.info(f"[ASK_GEMINI] SUCCESS with {model_name}. Response length: {len(response_text)}")
                 logger.info("=" * 80)
-                return Response({"response": response_text}, status=status.HTTP_200_OK)
-
+                return Response(
+                    {"response": response_text, "model_used": model_name, "warnings": warnings},
+                    status=status.HTTP_200_OK,
+                )
+ 
             except ClientError as e:
                 error_message = str(e)
                 logger.error(f"[ASK_GEMINI] ClientError with {model_name}: {error_message}")
+ 
                 if "API_KEY_INVALID" in error_message or "API key not valid" in error_message:
                     logger.error("[ASK_GEMINI] FAILURE: Invalid API key")
                     logger.info("=" * 80)
                     return Response({"error": "Invalid or unauthorized API key provided."}, status=status.HTTP_401_UNAUTHORIZED)
+ 
                 if "RESOURCE_EXHAUSTED" in error_message or "quota" in error_message.lower():
-                    logger.warning(f"[ASK_GEMINI] {model_name} quota exceeded, trying next model...")
+                    msg = f"{model_name} hit its quota limit, trying next model."
+                    logger.warning(f"[ASK_GEMINI] {msg}")
+                    warnings.append(msg)
+                    break  # transient -- do NOT blacklist, just move on for now
+ 
+                if _looks_like_deprecated_for_key(error_message):
+                    msg = f"{model_name} is no longer available for this API key, trying next model."
+                    logger.warning(f"[ASK_GEMINI] {msg}")
+                    _mark_model_dead(token, model_name, "deprecated for this key")
+                    warnings.append(msg)
                     break
+ 
+                if _looks_like_paid_only_rejection(error_message):
+                    msg = f"{model_name} requires a paid account, trying next model."
+                    logger.warning(f"[ASK_GEMINI] {msg}")
+                    _mark_model_dead(token, model_name, "requires paid tier")
+                    warnings.append(msg)
+                    break
+ 
                 logger.info("=" * 80)
                 return Response({"error": f"Client error with {model_name}: {error_message}"}, status=status.HTTP_400_BAD_REQUEST)
-
+ 
             except ServerError as e:
                 if "UNAVAILABLE" in str(e):
                     logger.warning(f"[ASK_GEMINI] {model_name} unavailable, retrying...")
@@ -336,19 +444,26 @@ def ask_gemini(request, max_retries=2, delay=2):
                 logger.error(f"[ASK_GEMINI] ServerError: {e}", exc_info=True)
                 logger.info("=" * 80)
                 return Response({"error": f"Server error: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
+ 
             except (httpx.RemoteProtocolError, httpx.ConnectError, httpx.ReadError) as e:
-                logger.warning(f"[ASK_GEMINI] Network error with {model_name}: {e} — trying next model")
+                msg = f"Network error reaching {model_name}, trying next model."
+                logger.warning(f"[ASK_GEMINI] {msg}: {e}")
+                warnings.append(msg)
                 break  # move to next model
             except Exception as e:
                 logger.error(f"[ASK_GEMINI] Unexpected error: {e}", exc_info=True)
                 logger.info("=" * 80)
                 return Response({"error": f"Unexpected error: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
+ 
     logger.error("[ASK_GEMINI] FAILURE: All models exhausted")
     logger.info("=" * 80)
-    return Response({"error": "All Gemini models are currently unavailable or quota exceeded."}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
-
+    return Response(
+        {
+            "error": "All Gemini models are currently unavailable or quota exceeded.",
+            "warnings": warnings,
+        },
+        status=status.HTTP_503_SERVICE_UNAVAILABLE,
+    )
 
 ############################################
 # Helper: load MOF CSV as formatted string
