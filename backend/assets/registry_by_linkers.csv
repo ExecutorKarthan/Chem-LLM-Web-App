@@ -287,7 +287,7 @@ Oc1c(cc(cc1c1ccc(cc1)C(=O)[O-])c1cc(c2ccc(cc2)C(=O)[O-])c(c(c1)c1ccc(cc1)C(=O)[O
 [O-]C(=O)c1cccc(c1)CN(Cc1cccc(c1)C(=O)[O-])Cc1ccc(cc1)CN(Cc1cccc(c1)C(=O)[O-])Cc1cccc(c1)C(=O)[O-],,Cu,[Cu][Cu].[O-]C(=O)c1cccc(c1)CN(Cc1cccc(c1)C(=O)[O-])Cc1ccc(cc1)CN(Cc1cccc(c1)C(=O)[O-])Cc1cccc(c1)C(=O)[O-]
 [O-]C(=O)c1cccc(c1)OCc1cc(cc(c1)C(=O)[O-])C(=O)[O-],,Zn,[O-]C(=O)c1cccc(c1)OCc1cc(cc(c1)C(=O)[O-])C(=O)[O-].[Zn][OH]1[Zn][OH]([Zn]1)[Zn]
 [O-]C(=O)c1cccc(c1)c1ccncc1,3-pyridin-4-ylbenzoate,"Cd, Co, Ni, Zn",[Cd].[O-]C(=O)c1cccc(c1)c1ccncc1; [Co].[O-]C(=O)c1cccc(c1)c1ccncc1; [Ni].[O-]C(=O)c1cccc(c1)c1ccncc1; [O-]C(=O)c1cccc(c1)c1ccncc1.[Zn]
-[O-]C(=O)c1ccccc1C(=O)[O-],,Cu,[Cu][OH]1[Cu][OH]([Cu]1)[Cu].[O-]C(=O)c1ccccc1C(=O)[O-]
+[O-]C(=O)c1ccccc1C(=O)[O-],phthalate,Cu,[Cu][OH]1[Cu][OH]([Cu]1)[Cu].[O-]C(=O)c1ccccc1C(=O)[O-]
 [O-]C(=O)c1ccnc(c1)C(=O)[O-],lutidinate,Co,[Co].[O-]C(=O)c1ccnc(c1)C(=O)[O-].[OH]
 [O-]C(=O)c1ccnc(c1)c1nccc(c1)C(=O)[O-],DTXSID20987602,La,[La].[O-]C(=O)c1ccnc(c1)c1nccc(c1)C(=O)[O-]
 [O-]C(=O)c1ccncc1,Isonicotinate,"Co, Eu, Mg, Ni",I[Cu][Cu]I.[Eu].[O-]C(=O)c1ccncc1; [Co].[Co]O[Co].[O-]C(=O)c1ccncc1; [Co][OH]1[Co][OH]([Co]1)[Co].[O-]C(=O)c1ccncc1; [Mg].[O-]C(=O)c1ccncc1; [Ni].[O-]C(=O)c1ccncc1
