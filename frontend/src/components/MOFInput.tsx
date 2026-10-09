@@ -48,6 +48,7 @@ export const MOFInput: React.FC<MOFInputProps> = ({
   const [simpleMode, setSimpleMode] = useState<boolean>(false);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState<boolean>(false);
 
   // Fetch the full metal/linker/guest-ion catalogs once on mount. Both
   // the "all" and "filtered" state for metals/linkers start out
@@ -109,6 +110,43 @@ export const MOFInput: React.FC<MOFInputProps> = ({
     if (onLinkerSelect) onLinkerSelect("");
   };
 
+  // Copies the currently selected linker value (the SMILES string, since
+  // the option label and value are identical) to the clipboard.
+  // navigator.clipboard only exists in secure contexts (HTTPS or
+  // localhost), so when it's unavailable or rejects — e.g. the app served
+  // over plain http from a Raspberry Pi on the LAN — fall back to a
+  // hidden textarea and document.execCommand("copy").
+  const handleCopyLinker = async () => {
+    if (!selectedLinker) return;
+    try {
+      await navigator.clipboard.writeText(selectedLinker);
+    } catch {
+      const ta = document.createElement("textarea");
+      ta.value = selectedLinker;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      document.body.removeChild(ta);
+    }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
+
+  // Rendered under the linker dropdown in both search modes, so it's
+  // defined once here rather than duplicated in each branch below.
+  const copyLinkerButton = (
+    <Button
+      size="small"
+      style={{ marginTop: 8 }}
+      onClick={handleCopyLinker}
+      disabled={!selectedLinker}
+    >
+      {copied ? "Copied!" : "Copy linker"}
+    </Button>
+  );
+
   // Sends the current metal/linker/guest-ion/simple-mode selection to
   // the backend, which resolves it to a specific MOF entry and returns
   // Python source for Skulpt to run (see views.generate_mof_code) plus
@@ -150,12 +188,14 @@ export const MOFInput: React.FC<MOFInputProps> = ({
                   to get its display common name (mof-filter/'s response
                   differs by which params are passed — see views.py). */}
               <Select showSearch value={selectedLinker} disabled={!selectedMetal} options={filteredLinkers} onChange={(v) => { setSelectedLinker(v); if (onLinkerSelect) onLinkerSelect(v); axios.get(`${BACKEND_URL}/api/mof-filter/`, { params: { metal: selectedMetal, linker: v } }).then(res => onLinkerNameUpdate(res.data.common_name || "")); }} />
+              {copyLinkerButton}
             </Form.Item>
           </>
         ) : (
           <>
             <Form.Item label="Organic Structural Linker">
               <Select showSearch value={selectedLinker} options={allLinkers} onChange={(v) => { setSelectedLinker(v); setSelectedMetal(undefined); if (onLinkerSelect) onLinkerSelect(v); axios.get(`${BACKEND_URL}/api/mof-filter/`, { params: { linker: v } }).then(res => onLinkerNameUpdate(res.data.common_name || "")); }} />
+              {copyLinkerButton}
             </Form.Item>
             <Form.Item label="Metal Core Selection">
               <Select showSearch value={selectedMetal} disabled={!selectedLinker} options={filteredMetals} onChange={setSelectedMetal} />
